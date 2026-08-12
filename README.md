@@ -488,10 +488,22 @@ Build on Windows with an MSYS2 UCRT64 shell. The required toolchain is CMake 3.2
 C:\msys64\msys2_shell.cmd -defterm -here -no-start -ucrt64 -c "pacman -S --needed git mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja mingw-w64-ucrt-x86_64-toolchain mingw-w64-ucrt-x86_64-cppwinrt mingw-w64-ucrt-x86_64-curl-winssl mingw-w64-ucrt-x86_64-miniupnpc mingw-w64-ucrt-x86_64-onevpl mingw-w64-ucrt-x86_64-openssl mingw-w64-ucrt-x86_64-opus mingw-w64-ucrt-x86_64-qt6-static"
 ```
 
-Clone the complete source tree and configure the selected Windows build preset, matching the repository CI configuration (`Ninja` with `RelWithDebInfo`):
+Clone the complete source tree and initialize its recursive dependencies:
 
 ```text
-C:\msys64\msys2_shell.cmd -defterm -here -no-start -ucrt64 -c "git clone --recurse-submodules https://github.com/LizardByte/Sunshine.git && cd Sunshine && cmake -B build -G Ninja -S . -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_TESTS=ON && cmake --build build"
+C:\msys64\msys2_shell.cmd -defterm -here -no-start -ucrt64 -c "git clone --recurse-submodules https://github.com/LizardByte/Sunshine.git && cd Sunshine && git submodule update --init --recursive"
+```
+
+At this revision, if the recursive update reports `Unable to find current revision in submodule path 'third-party/build-deps/third-party/FFmpeg/AMF'`, fetch the pinned AMF object and resume the update:
+
+```text
+C:\msys64\msys2_shell.cmd -defterm -here -no-start -ucrt64 -c "cd Sunshine && git -C third-party/build-deps/third-party/FFmpeg/AMF fetch --depth=1 origin eadd00804d5f7e5cd8c85d540073198312870776 && git -C third-party/build-deps/third-party/FFmpeg/AMF checkout --detach eadd00804d5f7e5cd8c85d540073198312870776 && git submodule update --init --recursive"
+```
+
+Configure and build using the selected Windows build preset, matching the repository CI configuration (`Ninja` with `RelWithDebInfo`):
+
+```text
+C:\msys64\msys2_shell.cmd -defterm -here -no-start -ucrt64 -c "cd Sunshine && cmake -B build -G Ninja -S . -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_TESTS=ON && cmake --build build"
 ```
 
 Sunshine requires C++23 (`CMAKE_CXX_STANDARD=23`) and uses the installed Qt6 package. This revision does not provide a `CMakePresets.json`; the explicit command above is the reproducible preset selection. If MSYS2, CMake, Ninja, the UCRT64 compiler, or Qt6 is unavailable, the prefixed command fails instead of selecting an unrelated host toolchain.
