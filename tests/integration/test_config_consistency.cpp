@@ -687,3 +687,25 @@ TEST_F(ConfigConsistencyTest, SecondMonitorProfileUsesExplicitFields) {
 
   EXPECT_EQ(content.find("second_monitor_arbitrary_command"), std::string::npos);
 }
+
+TEST_F(ConfigConsistencyTest, LifecycleSnapshotDoesNotHoldStateLockDuringSchedulerExecution) {
+  const std::string content = file_handler::read_file("src/display_device.cpp");
+  const size_t status_start = content.find("second_monitor_status_t second_monitor_status()");
+  const size_t scheduler_execution = content.find("DD_DATA.sm_instance->execute", status_start);
+  const size_t lifecycle_lock = content.find("std::lock_guard lifecycle_lock", status_start);
+
+  ASSERT_NE(status_start, std::string::npos);
+  ASSERT_NE(scheduler_execution, std::string::npos);
+  ASSERT_NE(lifecycle_lock, std::string::npos);
+  EXPECT_LT(scheduler_execution, lifecycle_lock);
+}
+
+TEST_F(ConfigConsistencyTest, RtspPendingLaunchTimeoutRequestsDisplayCleanup) {
+  const std::string content = file_handler::read_file("src/rtsp.cpp");
+  const size_t timeout_start = content.find("raised_timer.async_wait");
+  const size_t cleanup_request = content.find("display_device::mark_launch_failed", timeout_start);
+
+  ASSERT_NE(timeout_start, std::string::npos);
+  ASSERT_NE(cleanup_request, std::string::npos);
+  EXPECT_LT(timeout_start, cleanup_request);
+}

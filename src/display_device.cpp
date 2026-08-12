@@ -152,14 +152,6 @@ namespace display_device {
     }
 #endif
 
-    bool looks_like_virtual_device(const EnumeratedDevice &device) {
-      std::string name {device.m_friendly_name};
-      std::ranges::transform(name, std::begin(name), [](const unsigned char character) {
-        return static_cast<char>(std::tolower(character));
-      });
-      return name.contains("virtual") || name.contains("vdd");
-    }
-
     std::string_view apply_result_name(SettingsManagerInterface::ApplyResult result) {
       using enum SettingsManagerInterface::ApplyResult;
 
@@ -788,6 +780,22 @@ namespace display_device {
     }
   }  // namespace
 
+  std::optional<bool> classify_virtual_device(const EnumeratedDevice &device) {
+    std::string name {device.m_friendly_name};
+    std::ranges::transform(name, std::begin(name), [](const unsigned char character) {
+      return static_cast<char>(std::tolower(character));
+    });
+    if ((name.contains("virtual") || name.contains("vdd")) && !device.m_edid) {
+      return true;
+    }
+
+    if (device.m_edid) {
+      return false;
+    }
+
+    return std::nullopt;
+  }
+
   std::string_view second_monitor_state_name(const second_monitor_state_e state) {
     switch (state) {
       case second_monitor_state_e::waiting_for_vdd:
@@ -837,6 +845,11 @@ namespace display_device {
     m_status.state = std::string {second_monitor_state_name(m_state)};
   }
 
+  void second_monitor_lifecycle_t::capture_reinitialized() {
+    m_state = second_monitor_state_e::capturing;
+    m_status.state = std::string {second_monitor_state_name(m_state)};
+  }
+
   void second_monitor_lifecycle_t::session_started() {
     ++m_session_owners;
     m_state = second_monitor_state_e::capturing;
@@ -861,7 +874,7 @@ namespace display_device {
   }
 
   bool second_monitor_lifecycle_t::launch_failed(const bool restore_enabled) {
-    if (!restore_enabled || m_restore_scheduled) {
+    if (m_session_owners != 0 || !restore_enabled || m_restore_scheduled) {
       return false;
     }
 
@@ -895,13 +908,14 @@ namespace display_device {
 
   second_monitor_status_t second_monitor_status() {
     std::lock_guard lock {DD_DATA.mutex};
-    std::lock_guard lifecycle_lock {DD_DATA.lifecycle_mutex};
-    auto status {DD_DATA.lifecycle.status()};
     const bool profile_enabled {config::video.second_monitor.enabled()};
 
     const auto devices {DD_DATA.sm_instance ? DD_DATA.sm_instance->execute([](auto &settings_iface) {
       return settings_iface.enumAvailableDevices();
     }) : EnumeratedDeviceList {}};
+
+    std::lock_guard lifecycle_lock {DD_DATA.lifecycle_mutex};
+    auto status {DD_DATA.lifecycle.status()};
     status.devices.reserve(devices.size());
     for (const auto &device : devices) {
       status.devices.push_back(second_monitor_device_status_t {
@@ -909,7 +923,7 @@ namespace display_device {
         .display_name = device.m_display_name,
         .friendly_name = device.m_friendly_name,
         .active = !device.m_display_name.empty(),
-        .virtual_device = looks_like_virtual_device(device) || (profile_enabled && device.m_device_id == config::video.second_monitor.device_id),
+        .virtual_device = classify_virtual_device(device),
         .current_width = device.m_info ? device.m_info->m_resolution.m_width : 0,
         .current_height = device.m_info ? device.m_info->m_resolution.m_height : 0
       });
@@ -921,7 +935,6 @@ namespace display_device {
 
     status.selected_device_id = config::video.second_monitor.device_id;
     status.capture_backend = config::video.second_monitor.capture_backend;
-    status.virtual_device = true;
 
     const auto selection {resolve_display_selection(config::video, devices)};
     status.mapped_output = selection.mapped_display_name;
@@ -930,6 +943,7 @@ namespace display_device {
         })}; device_it != std::end(devices)) {
       status.active = !device_it->m_display_name.empty();
       status.friendly_name = device_it->m_friendly_name;
+      status.virtual_device = classify_virtual_device(*device_it);
       if (device_it->m_info) {
         status.current_width = device_it->m_info->m_resolution.m_width;
         status.current_height = device_it->m_info->m_resolution.m_height;
@@ -999,11 +1013,11 @@ namespace display_device {
     return config::video.second_monitor.enabled() && DD_DATA.lifecycle.launch_failed(restore_enabled);
   }
 
-  void mark_restore_finished(const bool success) {
+  void mark_capture_reinitialized() {
     std::lock_guard lock {DD_DATA.mutex};
     std::lock_guard lifecycle_lock {DD_DATA.lifecycle_mutex};
     if (config::video.second_monitor.enabled()) {
-      DD_DATA.lifecycle.restore_finished(success);
+      DD_DATA.lifecycle.capture_reinitialized();
     }
   }
 
@@ -1189,10 +1203,6 @@ namespace display_device {
       if (result == Ok) {
         BOOST_LOG(info) << "Display device configuration applied successfully.";
       } else if (result == ApiTemporarilyUnavailable) {
-        if (config::video.second_monitor.enabled()) {
-          std::lock_guard lifecycle_lock {DD_DATA.lifecycle_mutex};
-          DD_DATA.lifecycle.capture_reinitializing("display configuration temporarily unavailable");
-        }
         BOOST_LOG(warning) << "Display device configuration API is temporarily unavailable. Will retry.";
       } else {
         BOOST_LOG(error) << "Display device configuration failed with result: " << apply_result_name(result);

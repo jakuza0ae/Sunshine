@@ -11,7 +11,13 @@ const props = defineProps([
 const config = ref(props.config)
 const secondMonitorStatus = ref(null)
 const statusError = ref('')
-const virtualDevices = computed(() => secondMonitorStatus.value?.devices?.filter(device => device.virtual_device) || [])
+const displayDevices = computed(() => secondMonitorStatus.value?.devices?.filter(device => device.virtual_device !== false) || [])
+
+function deviceTypeLabel(value) {
+  if (value === true) return 'virtual'
+  if (value === false) return 'physical'
+  return 'unknown'
+}
 
 function updateSecondMonitorPolicy() {
   config.value.second_monitor_display_policy = config.value.second_monitor_device_id ? 'vdd_only' : 'disabled'
@@ -45,23 +51,23 @@ const outputNamePlaceholder = _outputNamePlaceholder;  // NOSONAR(javascript:S14
 
 <template>
   <div class="mb-3">
-    <div v-if="virtualDevices.length" class="mb-3">
+    <div v-if="displayDevices.length" class="mb-3">
       <label for="second_monitor_device_id" class="form-label">Second-monitor VDD</label>
       <select id="second_monitor_device_id" class="form-select"
               v-model="config.second_monitor_device_id"
               @change="updateSecondMonitorPolicy">
         <option value="">Use regular Sunshine display selection</option>
-        <option v-for="device in virtualDevices"
+        <option v-for="device in displayDevices"
                 :key="device.device_id" :value="device.device_id">
           {{ device.friendly_name || device.display_name || 'Display device' }}
           ({{ device.device_id }})
-          {{ device.virtual_device ? '- virtual' : '- physical' }}
+          - {{ deviceTypeLabel(device.virtual_device) }}
         </option>
       </select>
     </div>
 
     <label for="output_name" class="form-label">{{ $t('config.output_name') }}</label>
-    <select v-if="secondMonitorStatus?.virtual_device && secondMonitorStatus?.selected_device_id"
+    <select v-if="secondMonitorStatus?.selected_device_id"
             class="form-select" id="output_name" v-model="config.output_name">
       <option :value="secondMonitorStatus.selected_device_id">
         {{ secondMonitorStatus.friendly_name || secondMonitorStatus.mapped_output || 'Virtual display' }}
@@ -70,11 +76,11 @@ const outputNamePlaceholder = _outputNamePlaceholder;  // NOSONAR(javascript:S14
     </select>
     <input v-else type="text" class="form-control" id="output_name" :placeholder="outputNamePlaceholder"
            v-model="config.output_name"/>
-    <div v-if="secondMonitorStatus?.virtual_device" class="mt-2 small">
+    <div v-if="secondMonitorStatus?.selected_device_id" class="mt-2 small">
       <div>Second-monitor device: {{ secondMonitorStatus.active ? 'active' : 'waiting for VDD' }}</div>
       <div>Stable ID: {{ secondMonitorStatus.selected_device_id || 'not selected' }}</div>
       <div>Current resolution: {{ secondMonitorStatus.current_resolution || 'unknown' }}</div>
-      <div>Virtual device: {{ secondMonitorStatus.virtual_device ? 'yes' : 'no' }}</div>
+      <div>Device type: {{ deviceTypeLabel(secondMonitorStatus.virtual_device) }}</div>
     </div>
     <div v-if="statusError" class="form-text">{{ statusError }}</div>
     <div class="form-text">

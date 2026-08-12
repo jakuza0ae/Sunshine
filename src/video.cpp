@@ -1731,6 +1731,7 @@ namespace video {
       switch (status) {
         case platf::capture_e::reinit:
           {
+            display_device::mark_capture_reinitializing("capture backend requested reinitialization");
             reinit_event.raise(true);
 
             // Some classes of images contain references to the display --> display won't delete unless img is deleted
@@ -1791,6 +1792,8 @@ namespace video {
             }
 
             display_wp = disp;
+
+            display_device::mark_capture_reinitialized();
 
             reinit_event.reset();
             continue;

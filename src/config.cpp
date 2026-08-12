@@ -811,8 +811,23 @@ namespace config {
     }
 
     video_t::second_monitor_t profile {};
+
+    if (const auto it {vars.find("second_monitor_display_policy")}; it != std::end(vars)) {
+      const auto value {second_monitor_value(vars, "second_monitor_display_policy"sv)};
+      if (value == "vdd_only") {
+        profile.display_policy = video_t::dd_t::config_option_e::vdd_only;
+      } else if (value == "disabled") {
+        profile.display_policy = video_t::dd_t::config_option_e::disabled;
+      } else {
+        BOOST_LOG(warning) << "config: second-monitor display policy must be vdd_only or disabled";
+        return std::nullopt;
+      }
+    } else {
+      profile.display_policy = video_t::dd_t::config_option_e::vdd_only;
+    }
+
     profile.device_id = second_monitor_value(vars, "second_monitor_device_id"sv);
-    if (profile.device_id.empty()) {
+    if (profile.device_id.empty() && profile.display_policy != video_t::dd_t::config_option_e::disabled) {
       BOOST_LOG(warning) << "config: second-monitor profile requires second_monitor_device_id";
       return std::nullopt;
     }
@@ -853,20 +868,6 @@ namespace config {
         return std::nullopt;
       }
       profile.stream_audio = *value;
-    }
-
-    if (const auto it {vars.find("second_monitor_display_policy")}; it != std::end(vars)) {
-      const auto value {second_monitor_value(vars, "second_monitor_display_policy"sv)};
-      if (value == "vdd_only") {
-        profile.display_policy = video_t::dd_t::config_option_e::vdd_only;
-      } else if (value == "disabled") {
-        profile.display_policy = video_t::dd_t::config_option_e::disabled;
-      } else {
-        BOOST_LOG(warning) << "config: second-monitor display policy must be vdd_only or disabled";
-        return std::nullopt;
-      }
-    } else {
-      profile.display_policy = video_t::dd_t::config_option_e::vdd_only;
     }
 
     if (const auto it {vars.find("second_monitor_restore_on_disconnect")}; it != std::end(vars)) {

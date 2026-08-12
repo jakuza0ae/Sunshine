@@ -2213,7 +2213,9 @@ namespace stream {
 
       session.broadcast_ref = broadcast.ref();
       if (!session.broadcast_ref) {
-        display_device::mark_launch_failed(config::video.second_monitor.restore_on_disconnect);
+        if (display_device::mark_launch_failed(config::video.second_monitor.restore_on_disconnect)) {
+          display_device::revert_configuration();
+        }
         return -1;
       }
 

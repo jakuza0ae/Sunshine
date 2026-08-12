@@ -187,6 +187,19 @@ TEST(SecondMonitorProfile, RequiresDeviceIdWhenEnabled) {
   EXPECT_FALSE(config::parse_second_monitor_profile(values));
 }
 
+TEST(SecondMonitorProfile, DisabledPolicyWithoutDeviceIdIsValidOptOut) {
+  const std::unordered_map<std::string, std::string> values {
+    {"second_monitor_display_policy", "disabled"}
+  };
+
+  const auto profile {config::parse_second_monitor_profile(values)};
+
+  ASSERT_TRUE(profile);
+  EXPECT_FALSE(profile->enabled());
+  EXPECT_TRUE(profile->device_id.empty());
+  EXPECT_EQ(profile->display_policy, config_option_e::disabled);
+}
+
 TEST(SecondMonitorProfile, ParsesValidVddProfile) {
   const std::unordered_map<std::string, std::string> values {
     {"second_monitor_device_id", "{vdd-guid}"},
@@ -290,6 +303,17 @@ TEST(SecondMonitorLifecycle, FailedLaunchSchedulesOneRestore) {
   EXPECT_EQ(lifecycle.status().state, "display_restore_failed");
 }
 
+TEST(SecondMonitorLifecycle, FailedPendingLaunchDoesNotRestoreAnotherOwner) {
+  display_device::second_monitor_lifecycle_t lifecycle;
+
+  lifecycle.capture_started("{vdd-guid}", "\\\\.\\DISPLAY2", "ddx", "h264_amf", 1280, 720, 30);
+  lifecycle.session_started();
+
+  EXPECT_FALSE(lifecycle.launch_failed(true));
+  EXPECT_EQ(lifecycle.status().state, "capturing");
+  EXPECT_TRUE(lifecycle.session_stopped(true));
+}
+
 TEST(SecondMonitorLifecycle, FinalOwnerRestoresAfterSharedSessionsEnd) {
   display_device::second_monitor_lifecycle_t lifecycle;
 
@@ -313,6 +337,29 @@ TEST(SecondMonitorLifecycle, CaptureReinitializationKeepsReasonInDiagnostics) {
 
   EXPECT_EQ(lifecycle.status().state, "capture_reinitializing");
   EXPECT_EQ(lifecycle.status().last_reinitialization_reason, "VDD hotplug");
+
+  lifecycle.capture_reinitialized();
+  EXPECT_EQ(lifecycle.status().state, "capturing");
+}
+
+TEST(DisplayDeviceClassification, UsesVirtualIdentitySignalsAndUnknownWhenMetadataIsInsufficient) {
+  const display_device::EnumeratedDevice virtual_device {
+    .m_device_id = "{vdd-guid}",
+    .m_friendly_name = "Virtual Display"
+  };
+  const display_device::EnumeratedDevice physical_device {
+    .m_device_id = "{physical-guid}",
+    .m_friendly_name = "ROG PG279Q",
+    .m_edid = display_device::EdidData {}
+  };
+  const display_device::EnumeratedDevice unknown_device {
+    .m_device_id = "{unknown-guid}",
+    .m_friendly_name = "Display"
+  };
+
+  EXPECT_EQ(display_device::classify_virtual_device(virtual_device), std::optional<bool> {true});
+  EXPECT_EQ(display_device::classify_virtual_device(physical_device), std::optional<bool> {false});
+  EXPECT_EQ(display_device::classify_virtual_device(unknown_device), std::nullopt);
 }
 
 using ParseHdrOption = DisplayDeviceConfigTest<std::pair<std::pair<hdr_option_e, client_wants_hdr_t>, std::optional<hdr_state_e>>>;

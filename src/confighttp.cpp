@@ -1042,6 +1042,9 @@ namespace confighttp {
     print_req(request);
 
     const auto status {display_device::second_monitor_status()};
+    const auto virtual_device_json = [](const std::optional<bool> value) {
+      return value ? nlohmann::json {*value} : nlohmann::json {nullptr};
+    };
     nlohmann::json devices = nlohmann::json::array();
     for (const auto &device : status.devices) {
       devices.push_back({
@@ -1049,7 +1052,7 @@ namespace confighttp {
         {"display_name", device.display_name},
         {"friendly_name", device.friendly_name},
         {"active", device.active},
-        {"virtual_device", device.virtual_device},
+        {"virtual_device", virtual_device_json(device.virtual_device)},
         {"current_resolution", std::format("{}x{}", device.current_width, device.current_height)}
       });
     }
@@ -1059,7 +1062,7 @@ namespace confighttp {
       {"mapped_output", status.mapped_output},
       {"friendly_name", status.friendly_name},
       {"active", status.active},
-      {"virtual_device", status.virtual_device},
+      {"virtual_device", virtual_device_json(status.virtual_device)},
       {"current_resolution", std::format("{}x{}", status.current_width, status.current_height)},
       {"devices", std::move(devices)},
       {"capture_backend", status.capture_backend},

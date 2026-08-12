@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -49,6 +50,13 @@ namespace display_device {
   [[nodiscard]] std::string_view second_monitor_state_name(second_monitor_state_e state);
 
   /**
+   * @brief Classify a display using available identity metadata.
+   * @param device Enumerated display device.
+   * @return True for a virtual identity, false for an EDID-backed physical identity, or empty when unknown.
+   */
+  [[nodiscard]] std::optional<bool> classify_virtual_device(const EnumeratedDevice &device);
+
+  /**
    * @brief Secret-free display choice shown by the second-monitor selector.
    */
   struct second_monitor_device_status_t {
@@ -56,7 +64,7 @@ namespace display_device {
     std::string display_name {};  ///< Current platform output name.
     std::string friendly_name {};  ///< Human-readable display name.
     bool active {};  ///< Whether the display has a current output mapping.
-    bool virtual_device {};  ///< Whether the device is identified as virtual.
+    std::optional<bool> virtual_device {};  ///< Whether the device is identified as virtual, or empty when unknown.
     unsigned int current_width {};  ///< Current width when available.
     unsigned int current_height {};  ///< Current height when available.
   };
@@ -70,7 +78,7 @@ namespace display_device {
     std::string mapped_output {};  ///< Current platform output name for the selected VDD.
     std::string friendly_name {};  ///< Human-readable name of the selected device.
     bool active {};  ///< Whether the selected device is currently enumerated.
-    bool virtual_device {};  ///< Whether the selected device is managed as a virtual display profile.
+    std::optional<bool> virtual_device {};  ///< Whether the selected device is virtual, or empty when unknown.
     unsigned int current_width {};  ///< Current enumerated device width in pixels.
     unsigned int current_height {};  ///< Current enumerated device height in pixels.
     std::string capture_backend {};  ///< Capture backend selected for the active profile.
@@ -91,6 +99,7 @@ namespace display_device {
     void retry(bool vdd_available);
     void capture_started(std::string selected_device_id, std::string mapped_output, std::string capture_backend, std::string encoder, unsigned int width, unsigned int height, unsigned int fps);
     void capture_reinitializing(std::string reason);
+    void capture_reinitialized();
     void session_started();
     [[nodiscard]] bool session_stopped(bool restore_enabled);
     [[nodiscard]] bool launch_failed(bool restore_enabled);
@@ -142,9 +151,9 @@ namespace display_device {
   [[nodiscard]] bool mark_launch_failed(bool restore_enabled);
 
   /**
-   * @brief Record the result of a scheduled display restore.
+   * @brief Record successful capture reinitialization.
    */
-  void mark_restore_finished(bool success);
+  void mark_capture_reinitialized();
 
   /**
    * @brief Resolved display selection used by display configuration and capture.

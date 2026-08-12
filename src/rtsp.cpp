@@ -23,6 +23,7 @@ extern "C" {
 
 // local includes
 #include "config.h"
+#include "display_device.h"
 #include "globals.h"
 #include "input.h"
 #include "logging.h"
@@ -607,6 +608,9 @@ namespace rtsp_stream {
           auto discarded = launch_event.pop(0s);
           if (discarded) {
             BOOST_LOG(debug) << "Event timeout: "sv << discarded->unique_id;
+            if (display_device::mark_launch_failed(config::video.second_monitor.restore_on_disconnect)) {
+              display_device::revert_configuration();
+            }
           }
         }
       });
