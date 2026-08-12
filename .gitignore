@@ -51,6 +51,7 @@ node_modules/
 
 # Dummy macOS files
 .DS_Store
+.worktrees/
 
 # Python
 *.egg-info/
