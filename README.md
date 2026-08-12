@@ -479,6 +479,29 @@ LizardByte has the full documentation hosted on [Read the Docs](https://docs.liz
     </tr>
 </table>
 
+## Building From Source
+
+### Windows (MSYS2 UCRT64)
+Build on Windows with an MSYS2 UCRT64 shell. The required toolchain is CMake 3.25 or newer, Ninja, a C++23-capable UCRT64 compiler, and Qt6. The following command installs the core packages used by the build:
+
+```text
+C:\msys64\msys2_shell.cmd -defterm -here -no-start -ucrt64 -c "pacman -S --needed git mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja mingw-w64-ucrt-x86_64-toolchain mingw-w64-ucrt-x86_64-cppwinrt mingw-w64-ucrt-x86_64-curl-winssl mingw-w64-ucrt-x86_64-miniupnpc mingw-w64-ucrt-x86_64-onevpl mingw-w64-ucrt-x86_64-openssl mingw-w64-ucrt-x86_64-opus mingw-w64-ucrt-x86_64-qt6-static"
+```
+
+Clone the complete source tree and configure the selected Windows build preset, matching the repository CI configuration (`Ninja` with `RelWithDebInfo`):
+
+```text
+C:\msys64\msys2_shell.cmd -defterm -here -no-start -ucrt64 -c "git clone --recurse-submodules https://github.com/LizardByte/Sunshine.git && cd Sunshine && cmake -B build -G Ninja -S . -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_TESTS=ON && cmake --build build"
+```
+
+Sunshine requires C++23 (`CMAKE_CXX_STANDARD=23`) and uses the installed Qt6 package. This revision does not provide a `CMakePresets.json`; the explicit command above is the reproducible preset selection. If MSYS2, CMake, Ninja, the UCRT64 compiler, or Qt6 is unavailable, the prefixed command fails instead of selecting an unrelated host toolchain.
+
+Run the unit tests from the build's `tests` directory:
+
+```text
+C:\msys64\msys2_shell.cmd -defterm -here -no-start -ucrt64 -c "cd Sunshine/build/tests && ./test_sunshine.exe --gtest_color=yes --gtest_output=xml:test_results.xml"
+```
+
 ## ❓ Support
 
 Our support methods are listed in our [LizardByte Docs](https://docs.lizardbyte.dev/latest/about/support.html).
