@@ -571,19 +571,26 @@ namespace input {
 
   /**
    * @brief Converts client coordinates on the specified surface into screen coordinates.
-   * @param input The input context.
+   * @param touch_port The current touch port metadata.
    * @param val The cartesian coordinate pair to convert.
    * @param size The size of the client's surface containing the value.
-   * @return The host-relative coordinate pair if a touchport is available.
+   * @return The host-relative coordinate pair if the touch port is valid.
    */
-  std::optional<std::pair<float, float>> client_to_touchport(std::shared_ptr<input_t> &input, const std::pair<float, float> &val, const std::pair<float, float> &size) {
-    auto &touch_port_event = input->touch_port_event;
-    auto &touch_port = input->touch_port;
-    if (touch_port_event->peek()) {
-      touch_port = *touch_port_event->pop();
-    }
-    if (!touch_port) {
-      BOOST_LOG(verbose) << "Ignoring early absolute input without a touch port"sv;
+  std::optional<std::pair<float, float>> map_client_coordinates_to_touchport(
+    const touch_port_t &touch_port,
+    const std::pair<float, float> &val,
+    const std::pair<float, float> &size
+  ) {
+    if (
+      touch_port.width <= 0 || touch_port.height <= 0 || touch_port.env_width <= 0 || touch_port.env_height <= 0 ||
+      size.first <= 0.0f || size.second <= 0.0f ||
+      !std::isfinite(val.first) || !std::isfinite(val.second) ||
+      !std::isfinite(size.first) || !std::isfinite(size.second) ||
+      !std::isfinite(touch_port.client_offsetX) || !std::isfinite(touch_port.client_offsetY) ||
+      !std::isfinite(touch_port.scalar_inv) || !std::isfinite(touch_port.scalar_tpcoords) ||
+      touch_port.client_offsetX < 0.0f || touch_port.client_offsetY < 0.0f ||
+      touch_port.scalar_inv <= 0.0f || touch_port.scalar_tpcoords <= 0.0f
+    ) {
       return std::nullopt;
     }
 
@@ -621,7 +628,36 @@ namespace input {
     */
     float final_x = (x + touch_port.offset_x * touch_port.scalar_tpcoords) / touch_port.scalar_tpcoords;
     float final_y = (y + touch_port.offset_y * touch_port.scalar_tpcoords) / touch_port.scalar_tpcoords;
+    if (!std::isfinite(final_x) || !std::isfinite(final_y)) {
+      return std::nullopt;
+    }
+
     return std::pair {final_x, final_y};
+  }
+
+  /**
+   * @brief Converts client coordinates while consuming pending touch-port metadata.
+   * @param input The input context.
+   * @param val The cartesian coordinate pair to convert.
+   * @param size The size of the client's surface containing the value.
+   * @return The host-relative coordinate pair if a touchport is available.
+   */
+  std::optional<std::pair<float, float>> client_to_touchport(
+    std::shared_ptr<input_t> &input,
+    const std::pair<float, float> &val,
+    const std::pair<float, float> &size
+  ) {
+    auto &touch_port_event = input->touch_port_event;
+    auto &touch_port = input->touch_port;
+    if (touch_port_event->peek()) {
+      touch_port = *touch_port_event->pop();
+    }
+    if (!touch_port) {
+      BOOST_LOG(verbose) << "Ignoring early absolute input without a touch port"sv;
+      return std::nullopt;
+    }
+
+    return map_client_coordinates_to_touchport(touch_port, val, size);
   }
 
   /**
@@ -1088,20 +1124,15 @@ namespace input {
   }
 
   /**
-   * @brief Map client-normalized coordinates to a monitor-local logical viewport.
+   * @brief Map touch-port coordinates to a monitor-local logical viewport.
    * @param port Touch port metadata for the current stream.
-   * @param normalized_x Client-normalized horizontal coordinate.
-   * @param normalized_y Client-normalized vertical coordinate.
+   * @param coords Host-relative coordinates in logical desktop units.
    * @return Monitor-local mapping, or std::nullopt when the port dimensions are invalid.
    */
-  std::optional<touch_mapping_result> map_client_touch_to_monitor(
-    const touch_port_t &port,
-    float normalized_x,
-    float normalized_y
-  ) {
+  std::optional<touch_mapping_result> map_touchport_to_monitor(const touch_port_t &port, const std::pair<float, float> &coords) {
     if (
       port.width <= 0 || port.height <= 0 || port.env_width <= 0 || port.env_height <= 0 ||
-      !std::isfinite(normalized_x) || !std::isfinite(normalized_y) ||
+      !std::isfinite(coords.first) || !std::isfinite(coords.second) ||
       !std::isfinite(port.client_offsetX) || !std::isfinite(port.client_offsetY) ||
       !std::isfinite(port.scalar_inv) || !std::isfinite(port.scalar_tpcoords) ||
       port.client_offsetX < 0.0f || port.client_offsetY < 0.0f ||
@@ -1118,17 +1149,14 @@ namespace input {
       content_width <= 0.0f || content_height <= 0.0f ||
       !std::isfinite(monitor_logical_w) || !std::isfinite(monitor_logical_h) ||
       monitor_logical_w < 1.0f || monitor_logical_h < 1.0f ||
-      monitor_logical_w > std::numeric_limits<int>::max() || monitor_logical_h > std::numeric_limits<int>::max()
+      static_cast<double>(monitor_logical_w) > std::numeric_limits<int>::max() ||
+      static_cast<double>(monitor_logical_h) > std::numeric_limits<int>::max()
     ) {
-      BOOST_LOG(warning) << "Ignoring touch/pen input due to invalid logical touch dimensions"sv;
       return std::nullopt;
     }
 
-    auto map_axis = [](float normalized, float port_size, float client_offset, float scalar_inv, float scalar_tpcoords, float monitor_logical_size) {
-      auto client_coordinate = std::clamp(normalized, 0.0f, 1.0f) * port_size;
-      client_coordinate = std::clamp(client_coordinate, client_offset, port_size - client_offset);
-      const auto monitor_coordinate = (client_coordinate - client_offset) * scalar_inv / scalar_tpcoords;
-      return std::clamp(monitor_coordinate / monitor_logical_size, 0.0f, 1.0f);
+    auto map_axis = [](float coordinate, int offset, float monitor_logical_size) {
+      return std::clamp((coordinate - offset) / monitor_logical_size, 0.0f, 1.0f);
     };
 
     return touch_mapping_result {
@@ -1138,9 +1166,40 @@ namespace input {
         static_cast<int>(monitor_logical_w),
         static_cast<int>(monitor_logical_h)
       },
-      map_axis(normalized_x, port.width, port.client_offsetX, port.scalar_inv, port.scalar_tpcoords, monitor_logical_w),
-      map_axis(normalized_y, port.height, port.client_offsetY, port.scalar_inv, port.scalar_tpcoords, monitor_logical_h)
+      map_axis(coords.first, port.offset_x, monitor_logical_w),
+      map_axis(coords.second, port.offset_y, monitor_logical_h)
     };
+  }
+
+  /**
+   * @brief Map client-normalized coordinates to a monitor-local logical viewport.
+   * @param port Touch port metadata for the current stream.
+   * @param normalized_x Client-normalized horizontal coordinate.
+   * @param normalized_y Client-normalized vertical coordinate.
+   * @return Monitor-local mapping, or std::nullopt when the port dimensions are invalid.
+   */
+  std::optional<touch_mapping_result> map_client_touch_to_monitor(
+    const touch_port_t &port,
+    float normalized_x,
+    float normalized_y
+  ) {
+    if (!std::isfinite(normalized_x) || !std::isfinite(normalized_y)) {
+      return std::nullopt;
+    }
+
+    auto coords = map_client_coordinates_to_touchport(
+      port,
+      {
+        std::clamp(normalized_x, 0.0f, 1.0f) * 65535.0f,
+        std::clamp(normalized_y, 0.0f, 1.0f) * 65535.0f
+      },
+      {65535.0f, 65535.0f}
+    );
+    if (!coords) {
+      return std::nullopt;
+    }
+
+    return map_touchport_to_monitor(port, *coords);
   }
 
   /**
@@ -1153,21 +1212,65 @@ namespace input {
   }
 
   /**
+   * @brief Check whether decoded native touch values are finite.
+   * @param x Normalized horizontal coordinate.
+   * @param y Normalized vertical coordinate.
+   * @param pressure_or_distance Pressure or hover distance.
+   * @param contact_area_major Major contact axis.
+   * @param contact_area_minor Minor contact axis.
+   * @return True when every value is finite.
+   */
+  bool touch_input_values_are_finite(
+    float x,
+    float y,
+    float pressure_or_distance,
+    float contact_area_major,
+    float contact_area_minor
+  ) {
+    return std::isfinite(x) && std::isfinite(y) && std::isfinite(pressure_or_distance) &&
+      std::isfinite(contact_area_major) && std::isfinite(contact_area_minor);
+  }
+
+  /**
+   * @brief Return whether native touch injection is enabled by policy.
+   * @return True when native pen/touch input is enabled.
+   */
+  bool native_touch_enabled() {
+    return config::input.native_pen_touch;
+  }
+
+  /**
    * @brief Called to pass a touch message to the platform backend.
    * @param input The input context pointer.
    * @param packet The touch packet.
    */
   void passthrough(std::shared_ptr<input_t> &input, PSS_TOUCH_PACKET packet) {
-    if (!config::input.native_pen_touch) {
+    if (!native_touch_enabled()) {
       return;
     }
 
-    auto &touch_port = input->touch_port;
-    auto mapping = map_client_touch_to_monitor(
-      touch_port,
-      from_clamped_netfloat(packet->x, 0.0f, 1.0f),
-      from_clamped_netfloat(packet->y, 0.0f, 1.0f)
+    const auto x = from_netfloat(packet->x);
+    const auto y = from_netfloat(packet->y);
+    const auto pressure_or_distance = from_netfloat(packet->pressureOrDistance);
+    const auto contact_area_major = from_netfloat(packet->contactAreaMajor);
+    const auto contact_area_minor = from_netfloat(packet->contactAreaMinor);
+    if (!touch_input_values_are_finite(x, y, pressure_or_distance, contact_area_major, contact_area_minor)) {
+      return;
+    }
+
+    auto coords = client_to_touchport(
+      input,
+      {
+        std::clamp(x, 0.0f, 1.0f) * 65535.0f,
+        std::clamp(y, 0.0f, 1.0f) * 65535.0f
+      },
+      {65535.0f, 65535.0f}
     );
+    if (!coords) {
+      return;
+    }
+
+    auto mapping = map_touchport_to_monitor(input->touch_port, *coords);
     if (!mapping) {
       return;
     }
@@ -1177,8 +1280,8 @@ namespace input {
 
     // Normalize the contact area based on the touchport
     auto contact_area = scale_client_contact_area(
-      {from_clamped_netfloat(packet->contactAreaMajor, 0.0f, 1.0f) * 65535.f,
-       from_clamped_netfloat(packet->contactAreaMinor, 0.0f, 1.0f) * 65535.f},
+      {std::clamp(contact_area_major, 0.0f, 1.0f) * 65535.0f,
+       std::clamp(contact_area_minor, 0.0f, 1.0f) * 65535.0f},
       rotation,
       {mapping->port.width / 65535.f, mapping->port.height / 65535.f}
     );
@@ -1189,7 +1292,7 @@ namespace input {
       util::endian::little(packet->pointerId),
       mapping->x,
       mapping->y,
-      from_clamped_netfloat(packet->pressureOrDistance, 0.0f, 1.0f),
+      std::clamp(pressure_or_distance, 0.0f, 1.0f),
       contact_area.first,
       contact_area.second,
     };
@@ -1203,16 +1306,32 @@ namespace input {
    * @param packet The pen packet.
    */
   void passthrough(std::shared_ptr<input_t> &input, PSS_PEN_PACKET packet) {
-    if (!config::input.native_pen_touch) {
+    if (!native_touch_enabled()) {
       return;
     }
 
-    auto &touch_port = input->touch_port;
-    auto mapping = map_client_touch_to_monitor(
-      touch_port,
-      from_clamped_netfloat(packet->x, 0.0f, 1.0f),
-      from_clamped_netfloat(packet->y, 0.0f, 1.0f)
+    const auto x = from_netfloat(packet->x);
+    const auto y = from_netfloat(packet->y);
+    const auto pressure_or_distance = from_netfloat(packet->pressureOrDistance);
+    const auto contact_area_major = from_netfloat(packet->contactAreaMajor);
+    const auto contact_area_minor = from_netfloat(packet->contactAreaMinor);
+    if (!touch_input_values_are_finite(x, y, pressure_or_distance, contact_area_major, contact_area_minor)) {
+      return;
+    }
+
+    auto coords = client_to_touchport(
+      input,
+      {
+        std::clamp(x, 0.0f, 1.0f) * 65535.0f,
+        std::clamp(y, 0.0f, 1.0f) * 65535.0f
+      },
+      {65535.0f, 65535.0f}
     );
+    if (!coords) {
+      return;
+    }
+
+    auto mapping = map_touchport_to_monitor(input->touch_port, *coords);
     if (!mapping) {
       return;
     }
@@ -1222,8 +1341,8 @@ namespace input {
 
     // Normalize the contact area based on the touchport
     auto contact_area = scale_client_contact_area(
-      {from_clamped_netfloat(packet->contactAreaMajor, 0.0f, 1.0f) * 65535.f,
-       from_clamped_netfloat(packet->contactAreaMinor, 0.0f, 1.0f) * 65535.f},
+      {std::clamp(contact_area_major, 0.0f, 1.0f) * 65535.0f,
+       std::clamp(contact_area_minor, 0.0f, 1.0f) * 65535.0f},
       rotation,
       {mapping->port.width / 65535.f, mapping->port.height / 65535.f}
     );
@@ -1236,7 +1355,7 @@ namespace input {
       rotation,
       mapping->x,
       mapping->y,
-      from_clamped_netfloat(packet->pressureOrDistance, 0.0f, 1.0f),
+      std::clamp(pressure_or_distance, 0.0f, 1.0f),
       contact_area.first,
       contact_area.second,
     };

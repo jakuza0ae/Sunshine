@@ -4,6 +4,9 @@
  */
 #include "../tests_common.h"
 
+#include <cmath>
+#include <limits>
+
 #include <src/input.h>
 
 namespace {
@@ -76,8 +79,47 @@ TEST(TouchMapping, RejectsInvalidDimensions) {
   EXPECT_FALSE(input::map_client_touch_to_monitor(port, 0.5f, 0.5f).has_value());
 }
 
+TEST(TouchMapping, RejectsLogicalDimensionsBeyondFloatIntBoundary) {
+  auto port = make_port();
+  port.scalar_inv = std::nextafter(
+    static_cast<float>(std::numeric_limits<int>::max()) / port.width,
+    std::numeric_limits<float>::infinity()
+  );
+
+  EXPECT_FALSE(input::map_client_touch_to_monitor(port, 0.5f, 0.5f).has_value());
+}
+
 TEST(TouchMapping, NormalizesRotationAndPreservesUnknown) {
   EXPECT_EQ(input::normalize_touch_rotation(720), 0);
   EXPECT_EQ(input::normalize_touch_rotation(361), 1);
   EXPECT_EQ(input::normalize_touch_rotation(LI_ROT_UNKNOWN), LI_ROT_UNKNOWN);
+}
+
+TEST(TouchMapping, RejectsNonFiniteTouchValues) {
+  const auto finite = 0.5f;
+  const auto not_finite = std::numeric_limits<float>::quiet_NaN();
+  const auto infinity = std::numeric_limits<float>::infinity();
+
+  EXPECT_TRUE(input::touch_input_values_are_finite(finite, finite, finite, finite, finite));
+  EXPECT_FALSE(input::touch_input_values_are_finite(not_finite, finite, finite, finite, finite));
+  EXPECT_FALSE(input::touch_input_values_are_finite(finite, finite, infinity, finite, finite));
+  EXPECT_FALSE(input::touch_input_values_are_finite(finite, finite, finite, not_finite, finite));
+  EXPECT_FALSE(input::touch_input_values_are_finite(finite, finite, finite, finite, infinity));
+  EXPECT_FALSE(input::map_client_touch_to_monitor(make_port(), not_finite, finite).has_value());
+}
+
+TEST(NativeTouchPolicy, DoesNotDependOnMousePolicy) {
+  const auto old_mouse = config::input.mouse;
+  const auto old_native_touch = config::input.native_pen_touch;
+
+  config::input.mouse = true;
+  config::input.native_pen_touch = false;
+  EXPECT_FALSE(input::native_touch_enabled());
+
+  config::input.mouse = false;
+  config::input.native_pen_touch = true;
+  EXPECT_TRUE(input::native_touch_enabled());
+
+  config::input.mouse = old_mouse;
+  config::input.native_pen_touch = old_native_touch;
 }

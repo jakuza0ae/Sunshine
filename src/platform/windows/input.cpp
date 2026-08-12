@@ -18,6 +18,10 @@
 
 // standard includes
 #include <cmath>
+#include <cstddef>
+#include <condition_variable>
+#include <memory>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -130,16 +134,48 @@ namespace platf {
   struct client_input_raw_t;
 
   /**
+   * @brief Synchronizes delayed synthetic pointer callbacks with client teardown.
+   */
+  struct repeat_state_t {
+    std::mutex mutex;  ///< Protects callback and task state.
+    std::condition_variable condition;  ///< Signals when callbacks have exited.
+    bool shutting_down {};  ///< Prevents callbacks from starting or rescheduling.
+    bool cancelling {};  ///< Prevents callbacks from injecting during cancellation.
+    std::size_t active_callbacks {};  ///< Number of callbacks currently executing.
+    thread_pool_util::ThreadPool::task_id_t task {};  ///< Queued delayed callback.
+    client_input_raw_t *owner {};  ///< Owning client context while it is alive.
+  };
+
+  using repeat_state_ptr = std::shared_ptr<repeat_state_t>;
+
+  // Active pointer interactions need a refresh at least every 50 ms.
+  constexpr auto ISPI_REPEAT_INTERVAL = 50ms;  ///< Protocol or platform constant for ispi repeat interval.
+
+  /**
+   * @brief Repeat a touch state after the keepalive interval.
+   * @param state Shared lifetime state for the client-specific input context.
+   */
+  void repeat_touch(repeat_state_ptr state);
+
+  /**
+   * @brief Repeat a pen state after the keepalive interval.
+   * @param state Shared lifetime state for the client-specific input context.
+   */
+  void repeat_pen(repeat_state_ptr state);
+
+  /**
    * @brief Cancel all active synthetic touch contacts for a client.
    * @param raw The client-specific input context.
+   * @param shutting_down Whether this is permanent client teardown.
    */
-  void cancel_all_active_touches(client_input_raw_t *raw);
+  void cancel_all_active_touches(client_input_raw_t *raw, bool shutting_down);
 
   /**
    * @brief Cancel an active synthetic pen contact for a client.
    * @param raw The client-specific input context.
+   * @param shutting_down Whether this is permanent client teardown.
    */
-  void cancel_active_pen(client_input_raw_t *raw);
+  void cancel_active_pen(client_input_raw_t *raw, bool shutting_down);
 
   constexpr float EARTH_G = 9.80665f;  ///< Meters per second squared represented by one gravity unit.
 
@@ -747,11 +783,15 @@ namespace platf {
      */
     client_input_raw_t(input_t &input) {
       global = (input_raw_t *) input.get();
+      penRepeat = std::make_shared<repeat_state_t>();
+      penRepeat->owner = this;
+      touchRepeat = std::make_shared<repeat_state_t>();
+      touchRepeat->owner = this;
     }
 
     ~client_input_raw_t() override {
-      cancel_active_pen(this);
-      cancel_all_active_touches(this);
+      cancel_active_pen(this, true);
+      cancel_all_active_touches(this, true);
 
       if (pen) {
         global->fnDestroySyntheticPointerDevice(pen);
@@ -770,13 +810,69 @@ namespace platf {
 
     HSYNTHETICPOINTERDEVICE pen {};  ///< Windows synthetic pointer device used for pen events.
     POINTER_TYPE_INFO penInfo {};  ///< Pen info.
-    thread_pool_util::ThreadPool::task_id_t penRepeatTask {};  ///< Pen repeat task.
+    repeat_state_ptr penRepeat;  ///< Pen repeat synchronization state.
 
     HSYNTHETICPOINTERDEVICE touch {};  ///< Windows synthetic pointer device used for touch events.
     POINTER_TYPE_INFO touchInfo[10] {};  ///< Touch info.
     UINT32 activeTouchSlots {};  ///< Active touch slots.
-    thread_pool_util::ThreadPool::task_id_t touchRepeatTask {};  ///< Touch repeat task.
+    repeat_state_ptr touchRepeat;  ///< Touch repeat synchronization state.
   };
+
+  using repeat_callback_t = void (*)(repeat_state_ptr);
+
+  /**
+   * @brief Queue the next guarded repeat callback.
+   * @param state Shared repeat state.
+   * @param callback Callback to execute after the keepalive interval.
+   */
+  void schedule_repeat_locked(const repeat_state_ptr &state, repeat_callback_t callback) {
+    if (state->shutting_down || state->cancelling) {
+      return;
+    }
+
+    state->task = task_pool.pushDelayed(
+      [state, callback]() {
+        callback(state);
+      },
+      ISPI_REPEAT_INTERVAL
+    ).task_id;
+  }
+
+  /**
+   * @brief Queue the next guarded repeat callback.
+   * @param state Shared repeat state.
+   * @param callback Callback to execute after the keepalive interval.
+   */
+  void schedule_repeat(const repeat_state_ptr &state, repeat_callback_t callback) {
+    std::lock_guard lock(state->mutex);
+    schedule_repeat_locked(state, callback);
+  }
+
+  /**
+   * @brief Cancel a repeat callback and wait for a running callback to finish.
+   * @param state Shared repeat state.
+   * @param shutting_down Whether this is permanent client teardown.
+   */
+  void cancel_repeat(const repeat_state_ptr &state, bool shutting_down) {
+    thread_pool_util::ThreadPool::task_id_t task {};
+    {
+      std::lock_guard lock(state->mutex);
+      state->cancelling = true;
+      state->shutting_down = state->shutting_down || shutting_down;
+      task = state->task;
+      state->task = nullptr;
+    }
+
+    if (task) {
+      task_pool.cancel(task);
+    }
+
+    std::unique_lock lock(state->mutex);
+    state->condition.wait(lock, [&state]() {
+      return state->active_callbacks == 0;
+    });
+    state->cancelling = false;
+  }
 
   /**
    * @brief Allocates a context to store per-client input data.
@@ -918,43 +1014,62 @@ namespace platf {
   // Active pointer interactions sent via InjectSyntheticPointerInput() seem to be automatically
   // cancelled by Windows if not repeated/updated within about a second. To avoid this, refresh
   // the injected input periodically.
-  constexpr auto ISPI_REPEAT_INTERVAL = 50ms;  ///< Protocol or platform constant for ispi repeat interval.
 
   /**
    * @brief Repeats the current touch state to avoid the interactions timing out.
-   * @param raw The raw client-specific input context.
+   * @param state Shared lifetime state for the client-specific input context.
    */
-  void repeat_touch(client_input_raw_t *raw) {
-    if (!inject_synthetic_pointer_input(raw->global, raw->touch, raw->touchInfo, raw->activeTouchSlots)) {
-      auto err = GetLastError();
-      BOOST_LOG(warning) << "Failed to refresh virtual touch input: "sv << err;
+  void repeat_touch(repeat_state_ptr state) {
+    std::unique_lock lock(state->mutex);
+    if (state->shutting_down || state->cancelling) {
+      return;
     }
 
-    raw->touchRepeatTask = task_pool.pushDelayed(repeat_touch, ISPI_REPEAT_INTERVAL, raw).task_id;
+    ++state->active_callbacks;
+    auto raw = state->owner;
+    if (!raw || !inject_synthetic_pointer_input(raw->global, raw->touch, raw->touchInfo, raw->activeTouchSlots)) {
+      if (raw) {
+        auto err = GetLastError();
+        BOOST_LOG(warning) << "Failed to refresh virtual touch input: "sv << err;
+      }
+    }
+
+    schedule_repeat_locked(state, repeat_touch);
+    --state->active_callbacks;
+    state->condition.notify_all();
   }
 
   /**
    * @brief Repeats the current pen state to avoid the interactions timing out.
-   * @param raw The raw client-specific input context.
+   * @param state Shared lifetime state for the client-specific input context.
    */
-  void repeat_pen(client_input_raw_t *raw) {
-    if (!inject_synthetic_pointer_input(raw->global, raw->pen, &raw->penInfo, 1)) {
-      auto err = GetLastError();
-      BOOST_LOG(warning) << "Failed to refresh virtual pen input: "sv << err;
+  void repeat_pen(repeat_state_ptr state) {
+    std::unique_lock lock(state->mutex);
+    if (state->shutting_down || state->cancelling) {
+      return;
     }
 
-    raw->penRepeatTask = task_pool.pushDelayed(repeat_pen, ISPI_REPEAT_INTERVAL, raw).task_id;
+    ++state->active_callbacks;
+    auto raw = state->owner;
+    if (!raw || !inject_synthetic_pointer_input(raw->global, raw->pen, &raw->penInfo, 1)) {
+      if (raw) {
+        auto err = GetLastError();
+        BOOST_LOG(warning) << "Failed to refresh virtual pen input: "sv << err;
+      }
+    }
+
+    schedule_repeat_locked(state, repeat_pen);
+    --state->active_callbacks;
+    state->condition.notify_all();
   }
 
   /**
    * @brief Cancel an active synthetic pen contact.
    * @param raw The client-specific input context.
+   * @param shutting_down Whether this is permanent client teardown.
    */
-  void cancel_active_pen(client_input_raw_t *raw) {
-    if (raw->penRepeatTask) {
-      task_pool.cancel(raw->penRepeatTask);
-      raw->penRepeatTask = nullptr;
-    }
+  void cancel_active_pen(client_input_raw_t *raw, bool shutting_down) {
+    cancel_repeat(raw->penRepeat, shutting_down);
 
     if (!raw->pen || raw->penInfo.penInfo.pointerInfo.pointerFlags == POINTER_FLAG_NONE) {
       return;
@@ -972,13 +1087,10 @@ namespace platf {
   /**
    * @brief Cancels all active touches.
    * @param raw The raw client-specific input context.
+   * @param shutting_down Whether this is permanent client teardown.
    */
-  void cancel_all_active_touches(client_input_raw_t *raw) {
-    // Cancel touch repeat callbacks
-    if (raw->touchRepeatTask) {
-      task_pool.cancel(raw->touchRepeatTask);
-      raw->touchRepeatTask = nullptr;
-    }
+  void cancel_all_active_touches(client_input_raw_t *raw, bool shutting_down) {
+    cancel_repeat(raw->touchRepeat, shutting_down);
 
     // Compact touches to update activeTouchSlots
     perform_touch_compaction(raw);
@@ -1012,6 +1124,15 @@ namespace platf {
   void touch_update(client_input_t *input, const touch_port_t &touch_port, const touch_input_t &touch) {
     auto raw = (client_input_raw_t *) input;
 
+    if (
+      !std::isfinite(touch.x) || !std::isfinite(touch.y) ||
+      !std::isfinite(touch.pressureOrDistance) ||
+      !std::isfinite(touch.contactAreaMajor) || !std::isfinite(touch.contactAreaMinor)
+    ) {
+      BOOST_LOG(warning) << "Ignoring touch input with non-finite values"sv;
+      return;
+    }
+
     // Bail if we're not running on an OS that supports virtual touch input
     if (!raw->global->fnCreateSyntheticPointerDevice || !raw->global->fnInjectSyntheticPointerInput || !raw->global->fnDestroySyntheticPointerDevice) {
       BOOST_LOG(warning) << "Touch input requires Windows 10 1809 or later"sv;
@@ -1034,15 +1155,12 @@ namespace platf {
       }
     }
 
-    // Cancel touch repeat callbacks
-    if (raw->touchRepeatTask) {
-      task_pool.cancel(raw->touchRepeatTask);
-      raw->touchRepeatTask = nullptr;
-    }
+    // Cancel and join any prior refresh before mutating the touch slots.
+    cancel_repeat(raw->touchRepeat, false);
 
     // If this is a special request to cancel all touches, do that and return
     if (touch.eventType == LI_TOUCH_EVENT_CANCEL_ALL) {
-      cancel_all_active_touches(raw);
+      cancel_all_active_touches(raw, false);
       return;
     }
 
@@ -1050,7 +1168,7 @@ namespace platf {
     auto pointer = pointer_by_id(raw, touch.pointerId, touch.eventType);
     if (!pointer) {
       BOOST_LOG(error) << "No unused pointer entries! Cancelling all active touches!"sv;
-      cancel_all_active_touches(raw);
+      cancel_all_active_touches(raw, false);
       pointer = pointer_by_id(raw, touch.pointerId, touch.eventType);
     }
 
@@ -1060,7 +1178,13 @@ namespace platf {
     touchInfo.pointerInfo.pointerType = PT_TOUCH;
 
     // Populate shared pointer info fields
-    populate_common_pointer_info(touchInfo.pointerInfo, touch_port, touch.eventType, touch.x, touch.y);
+    populate_common_pointer_info(
+      touchInfo.pointerInfo,
+      touch_port,
+      touch.eventType,
+      std::clamp(touch.x, 0.0f, 1.0f),
+      std::clamp(touch.y, 0.0f, 1.0f)
+    );
 
     touchInfo.touchMask = TOUCH_MASK_NONE;
 
@@ -1069,17 +1193,20 @@ namespace platf {
     // The clients also pass distance and tool size for hovers, but Windows doesn't
     // provide APIs to receive that data.
     if (touchInfo.pointerInfo.pointerFlags & POINTER_FLAG_INCONTACT) {
-      if (touch.pressureOrDistance != 0.0f) {
+      const auto pressure_or_distance = std::clamp(touch.pressureOrDistance, 0.0f, 1.0f);
+      if (pressure_or_distance != 0.0f) {
         touchInfo.touchMask |= TOUCH_MASK_PRESSURE;
 
         // Convert the 0.0f..1.0f float to the 0..1024 range that Windows uses
-        touchInfo.pressure = (UINT32) (touch.pressureOrDistance * 1024);
+        touchInfo.pressure = (UINT32) (pressure_or_distance * 1024);
       } else {
         // The default touch pressure is 512
         touchInfo.pressure = 512;
       }
 
-      if (touch.contactAreaMajor != 0.0f && touch.contactAreaMinor != 0.0f) {
+      const auto contact_area_major = std::clamp(touch.contactAreaMajor, 0.0f, 65535.0f);
+      const auto contact_area_minor = std::clamp(touch.contactAreaMinor, 0.0f, 65535.0f);
+      if (contact_area_major != 0.0f && contact_area_minor != 0.0f) {
         // For the purposes of contact area calculation, we will assume the touches
         // are at a 45 degree angle if rotation is unknown. This will scale the major
         // axis value by width and height equally.
@@ -1089,8 +1216,8 @@ namespace platf {
         float minorAxisAngle = majorAxisAngle + (M_PI / 2);
 
         // Estimate the contact rectangle
-        float contactWidth = (std::cos(majorAxisAngle) * touch.contactAreaMajor) + (std::cos(minorAxisAngle) * touch.contactAreaMinor);
-        float contactHeight = (std::sin(majorAxisAngle) * touch.contactAreaMajor) + (std::sin(minorAxisAngle) * touch.contactAreaMinor);
+        float contactWidth = (std::cos(majorAxisAngle) * contact_area_major) + (std::cos(minorAxisAngle) * contact_area_minor);
+        float contactHeight = (std::sin(majorAxisAngle) * contact_area_major) + (std::sin(minorAxisAngle) * contact_area_minor);
 
         // Convert into screen coordinates centered at the touch location and constrained by screen dimensions
         touchInfo.rcContact.left = std::max<LONG>(touch_port.offset_x, touchInfo.pointerInfo.ptPixelLocation.x - std::floor(contactWidth / 2));
@@ -1123,7 +1250,7 @@ namespace platf {
 
     // If we still have an active touch, refresh the touch state periodically
     if (raw->activeTouchSlots > 1 || touchInfo.pointerInfo.pointerFlags != POINTER_FLAG_NONE) {
-      raw->touchRepeatTask = task_pool.pushDelayed(repeat_touch, ISPI_REPEAT_INTERVAL, raw).task_id;
+      schedule_repeat(raw->touchRepeat, repeat_touch);
     }
   }
 
@@ -1135,6 +1262,15 @@ namespace platf {
    */
   void pen_update(client_input_t *input, const touch_port_t &touch_port, const pen_input_t &pen) {
     auto raw = (client_input_raw_t *) input;
+
+    if (
+      !std::isfinite(pen.x) || !std::isfinite(pen.y) ||
+      !std::isfinite(pen.pressureOrDistance) ||
+      !std::isfinite(pen.contactAreaMajor) || !std::isfinite(pen.contactAreaMinor)
+    ) {
+      BOOST_LOG(warning) << "Ignoring pen input with non-finite values"sv;
+      return;
+    }
 
     // Bail if we're not running on an OS that supports virtual pen input
     if (!raw->global->fnCreateSyntheticPointerDevice || !raw->global->fnInjectSyntheticPointerInput || !raw->global->fnDestroySyntheticPointerDevice) {
@@ -1158,11 +1294,8 @@ namespace platf {
       }
     }
 
-    // Cancel pen repeat callbacks
-    if (raw->penRepeatTask) {
-      task_pool.cancel(raw->penRepeatTask);
-      raw->penRepeatTask = nullptr;
-    }
+    // Cancel and join any prior refresh before mutating the pen state.
+    cancel_repeat(raw->penRepeat, false);
 
     raw->penInfo.type = PT_PEN;
 
@@ -1171,7 +1304,13 @@ namespace platf {
     penInfo.pointerInfo.pointerId = 0;
 
     // Populate shared pointer info fields
-    populate_common_pointer_info(penInfo.pointerInfo, touch_port, pen.eventType, pen.x, pen.y);
+    populate_common_pointer_info(
+      penInfo.pointerInfo,
+      touch_port,
+      pen.eventType,
+      std::clamp(pen.x, 0.0f, 1.0f),
+      std::clamp(pen.y, 0.0f, 1.0f)
+    );
 
     // Windows only supports a single pen button, so send all buttons as the barrel button
     if (pen.penButtons) {
@@ -1196,11 +1335,12 @@ namespace platf {
     penInfo.penMask = PEN_MASK_NONE;
 
     // Windows doesn't support hover distance, so only pass pressure/distance when the pointer is in contact
-    if ((penInfo.pointerInfo.pointerFlags & POINTER_FLAG_INCONTACT) && pen.pressureOrDistance != 0.0f) {
+    const auto pressure_or_distance = std::clamp(pen.pressureOrDistance, 0.0f, 1.0f);
+    if ((penInfo.pointerInfo.pointerFlags & POINTER_FLAG_INCONTACT) && pressure_or_distance != 0.0f) {
       penInfo.penMask |= PEN_MASK_PRESSURE;
 
       // Convert the 0.0f..1.0f float to the 0..1024 range that Windows uses
-      penInfo.pressure = (UINT32) (pen.pressureOrDistance * 1024);
+      penInfo.pressure = (UINT32) (pressure_or_distance * 1024);
     } else {
       // The default pen pressure is 0
       penInfo.pressure = 0;
@@ -1240,7 +1380,7 @@ namespace platf {
 
     // If we still have an active pen interaction, refresh the pen state periodically
     if (penInfo.pointerInfo.pointerFlags != POINTER_FLAG_NONE) {
-      raw->penRepeatTask = task_pool.pushDelayed(repeat_pen, ISPI_REPEAT_INTERVAL, raw).task_id;
+      schedule_repeat(raw->penRepeat, repeat_pen);
     }
   }
 

@@ -112,6 +112,30 @@ namespace input {
   uint16_t normalize_touch_rotation(uint16_t rotation);
 
   /**
+   * @brief Check whether decoded native touch values are safe to convert and inject.
+   *
+   * @param x Normalized horizontal coordinate.
+   * @param y Normalized vertical coordinate.
+   * @param pressure_or_distance Pressure or hover distance.
+   * @param contact_area_major Major contact axis.
+   * @param contact_area_minor Minor contact axis.
+   * @return True when every value is finite.
+   */
+  bool touch_input_values_are_finite(
+    float x,
+    float y,
+    float pressure_or_distance,
+    float contact_area_major,
+    float contact_area_minor
+  );
+
+  /**
+   * @brief Return whether native touch injection is enabled by policy.
+   * @return True when native pen/touch input is enabled.
+   */
+  bool native_touch_enabled();
+
+  /**
    * @brief Scale the ellipse axes according to the provided size.
    * @param val The major and minor axis pair.
    * @param rotation The rotation value from the touch/pen event.
