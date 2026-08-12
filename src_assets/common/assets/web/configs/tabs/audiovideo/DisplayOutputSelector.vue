@@ -11,7 +11,7 @@ const props = defineProps([
 const config = ref(props.config)
 const secondMonitorStatus = ref(null)
 const statusError = ref('')
-const displayDevices = computed(() => secondMonitorStatus.value?.devices?.filter(device => device.virtual_device !== false) || [])
+const displayDevices = computed(() => secondMonitorStatus.value?.devices?.filter(device => device.virtual_device === true) || [])
 
 function deviceTypeLabel(value) {
   if (value === true) return 'virtual'

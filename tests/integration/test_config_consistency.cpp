@@ -709,3 +709,10 @@ TEST_F(ConfigConsistencyTest, RtspPendingLaunchTimeoutRequestsDisplayCleanup) {
   ASSERT_NE(cleanup_request, std::string::npos);
   EXPECT_LT(timeout_start, cleanup_request);
 }
+
+TEST_F(ConfigConsistencyTest, SelectorOffersOnlyConfirmedVirtualDevices) {
+  const std::string content = file_handler::read_file("src_assets/common/assets/web/configs/tabs/audiovideo/DisplayOutputSelector.vue");
+
+  EXPECT_NE(content.find("device.virtual_device === true"), std::string::npos);
+  EXPECT_EQ(content.find("device.virtual_device !== false"), std::string::npos);
+}

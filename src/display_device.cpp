@@ -785,8 +785,8 @@ namespace display_device {
     std::ranges::transform(name, std::begin(name), [](const unsigned char character) {
       return static_cast<char>(std::tolower(character));
     });
-    if ((name.contains("virtual") || name.contains("vdd")) && !device.m_edid) {
-      return true;
+    if (name.contains("virtual") || name.contains("vdd")) {
+      return device.m_edid ? std::nullopt : std::optional<bool> {true};
     }
 
     if (device.m_edid) {
@@ -1092,7 +1092,7 @@ namespace display_device {
     const auto device_it {std::find_if(std::begin(devices), std::end(devices), [&device_id = video_config.output_name](const auto &device) {
       return device.m_device_id == device_id;
     })};
-    if (device_it == std::end(devices) || device_it->m_display_name.empty()) {
+    if (device_it == std::end(devices) || device_it->m_display_name.empty() || classify_virtual_device(*device_it) != std::optional<bool> {true}) {
       selection.unavailable = true;
       return selection;
     }

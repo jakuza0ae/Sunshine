@@ -13,6 +13,8 @@
 #include <unordered_map>
 
 namespace {
+  using namespace std::literals;
+
   using config_option_e = config::video_t::dd_t::config_option_e;
   using device_prep_t = display_device::SingleDisplayConfiguration::DevicePreparation;
 
@@ -105,7 +107,7 @@ TEST(DisplayDeviceSelection, SelectedVddUsesCurrentDisplayName) {
   video_config.output_name = "vdd-guid";
 
   const display_device::EnumeratedDeviceList devices {
-    {.m_device_id = "vdd-guid", .m_display_name = "\\\\.\\DISPLAY2"}
+    {.m_device_id = "vdd-guid", .m_display_name = "\\\\.\\DISPLAY2", .m_friendly_name = "Virtual Display"}
   };
 
   const auto result {display_device::resolve_display_selection(video_config, devices)};
@@ -133,12 +135,12 @@ TEST(DisplayDeviceSelection, DeviceOrderDoesNotChangeSelectedVdd) {
   video_config.output_name = "vdd-guid";
 
   const display_device::EnumeratedDeviceList first_order {
-    {.m_device_id = "vdd-guid", .m_display_name = "\\\\.\\DISPLAY2"},
+    {.m_device_id = "vdd-guid", .m_display_name = "\\\\.\\DISPLAY2", .m_friendly_name = "Virtual Display"},
     {.m_device_id = "physical-guid", .m_display_name = "\\\\.\\DISPLAY1"}
   };
   const display_device::EnumeratedDeviceList second_order {
     {.m_device_id = "physical-guid", .m_display_name = "\\\\.\\DISPLAY1"},
-    {.m_device_id = "vdd-guid", .m_display_name = "\\\\.\\DISPLAY2"}
+    {.m_device_id = "vdd-guid", .m_display_name = "\\\\.\\DISPLAY2", .m_friendly_name = "Virtual Display"}
   };
 
   const auto first_result {display_device::resolve_display_selection(video_config, first_order)};
@@ -160,6 +162,26 @@ TEST(DisplayDeviceSelection, EmptySelectionRetainsDefaultBehavior) {
   EXPECT_TRUE(result.selected_device_id.empty());
   EXPECT_TRUE(result.mapped_display_name.empty());
   EXPECT_FALSE(result.unavailable);
+}
+
+TEST(DisplayDeviceSelection, PhysicalAndUnknownVddAreUnavailable) {
+  config::video_t video_config {};
+  video_config.dd.configuration_option = config_option_e::vdd_only;
+
+  for (const auto &device_id : {"physical-guid"sv, "unknown-guid"sv}) {
+    video_config.output_name = device_id;
+    const display_device::EnumeratedDevice device {
+      .m_device_id = std::string {device_id},
+      .m_display_name = "\\\\.\\DISPLAY2",
+      .m_friendly_name = device_id == "physical-guid"sv ? "ROG PG279Q" : "Display",
+      .m_edid = device_id == "physical-guid"sv ? std::optional<display_device::EdidData> {display_device::EdidData {}} : std::nullopt
+    };
+
+    const auto result {display_device::resolve_display_selection(video_config, {device})};
+
+    EXPECT_TRUE(result.unavailable) << device_id;
+    EXPECT_TRUE(result.mapped_display_name.empty()) << device_id;
+  }
 }
 
 TEST(SecondMonitorProfile, EmptyConfigIsOptedOutWithSafeDefaults) {
@@ -352,6 +374,11 @@ TEST(DisplayDeviceClassification, UsesVirtualIdentitySignalsAndUnknownWhenMetada
     .m_friendly_name = "ROG PG279Q",
     .m_edid = display_device::EdidData {}
   };
+  const display_device::EnumeratedDevice virtual_device_with_edid {
+    .m_device_id = "{vdd-edid-guid}",
+    .m_friendly_name = "Virtual Display",
+    .m_edid = display_device::EdidData {}
+  };
   const display_device::EnumeratedDevice unknown_device {
     .m_device_id = "{unknown-guid}",
     .m_friendly_name = "Display"
@@ -359,6 +386,7 @@ TEST(DisplayDeviceClassification, UsesVirtualIdentitySignalsAndUnknownWhenMetada
 
   EXPECT_EQ(display_device::classify_virtual_device(virtual_device), std::optional<bool> {true});
   EXPECT_EQ(display_device::classify_virtual_device(physical_device), std::optional<bool> {false});
+  EXPECT_EQ(display_device::classify_virtual_device(virtual_device_with_edid), std::nullopt);
   EXPECT_EQ(display_device::classify_virtual_device(unknown_device), std::nullopt);
 }
 

@@ -187,6 +187,7 @@ set(INTEGRATION_TEST_FILES
     "src/display_device.cpp"
     "src/rtsp.cpp"
     "src_assets/common/assets/web/config.html"
+    "src_assets/common/assets/web/configs/tabs/audiovideo/DisplayOutputSelector.vue"
     "docs/configuration.md"
     "src_assets/common/assets/web/public/assets/locale/en.json"
     "src_assets/common/assets/web/configs/tabs/General.vue"
