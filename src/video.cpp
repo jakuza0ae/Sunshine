@@ -1455,13 +1455,26 @@ namespace video {
    * @param display_names The list of display names to repopulate.
    * @param current_display_index The current display index or -1 if not yet known.
    */
-  void refresh_displays(platf::mem_type_e dev_type, std::vector<std::string> &display_names, int &current_display_index) {
-    // It is possible that the output name may be empty even if it wasn't before (device disconnected) or vice-versa
-    const auto output_name {display_device::map_output_name(config::video.output_name)};
+  bool refresh_displays(platf::mem_type_e dev_type, std::vector<std::string> &display_names, int &current_display_index) {
+    const auto selection {display_device::get_display_selection(config::video)};
+    const bool vdd_only {
+      config::video.dd.configuration_option == config::video_t::dd_t::config_option_e::vdd_only &&
+      !config::video.output_name.empty()
+    };
+    if (selection.unavailable) {
+      BOOST_LOG(warning) << "The configured VDD is unavailable; display capture will retry without selecting a physical display."sv;
+      display_names.clear();
+      current_display_index = -1;
+      return false;
+    }
+
+    const auto &output_name {selection.mapped_display_name};
     std::string current_display_name;
 
-    // If we have a current display index, let's start with that
-    if (current_display_index >= 0 && current_display_index < display_names.size()) {
+    if (vdd_only) {
+      current_display_name = output_name;
+    } else if (current_display_index >= 0 && current_display_index < static_cast<int>(display_names.size())) {
+      // If we have a current display index, let's start with that
       current_display_name = display_names.at(current_display_index);
     }
 
@@ -1469,13 +1482,31 @@ namespace video {
     auto old_display_names = std::move(display_names);
     display_names = platf::display_names(dev_type);
 
-    // If we now have no displays, let's put the old display array back and fail
-    if (display_names.empty() && !old_display_names.empty()) {
+    // A VDD must never fall back to an arbitrary physical display.
+    if (display_names.empty() && vdd_only) {
+      BOOST_LOG(error) << "The configured VDD is not available after display reenumeration."sv;
+      current_display_index = -1;
+      return false;
+    } else if (display_names.empty() && !old_display_names.empty()) {
       BOOST_LOG(error) << "No displays were found after reenumeration!"sv;
       display_names = std::move(old_display_names);
-      return;
+      return true;
     } else if (display_names.empty()) {
       display_names.emplace_back(output_name);
+    }
+
+    if (vdd_only) {
+      for (int x = 0; x < static_cast<int>(display_names.size()); ++x) {
+        if (display_names[x] == output_name) {
+          current_display_index = x;
+          return true;
+        }
+      }
+
+      BOOST_LOG(error) << "The configured VDD display name ["sv << output_name << "] is not available for capture."sv;
+      display_names.clear();
+      current_display_index = -1;
+      return false;
     }
 
     // We now have a new display name list, so reset the index back to 0
@@ -1483,23 +1514,25 @@ namespace video {
 
     // If we had a name previously, let's try to find it in the new list
     if (!current_display_name.empty()) {
-      for (int x = 0; x < display_names.size(); ++x) {
+      for (int x = 0; x < static_cast<int>(display_names.size()); ++x) {
         if (display_names[x] == current_display_name) {
           current_display_index = x;
-          return;
+          return true;
         }
       }
 
       // The old display was removed, so we'll start back at the first display again
       BOOST_LOG(warning) << "Previous active display ["sv << current_display_name << "] is no longer present"sv;
     } else {
-      for (int x = 0; x < display_names.size(); ++x) {
+      for (int x = 0; x < static_cast<int>(display_names.size()); ++x) {
         if (display_names[x] == output_name) {
           current_display_index = x;
-          return;
+          return true;
         }
       }
     }
+
+    return true;
   }
 
   /**
@@ -1543,7 +1576,9 @@ namespace video {
     // get the most up-to-date list available monitors
     std::vector<std::string> display_names;
     int display_p = -1;
-    refresh_displays(encoder.platform_formats->dev_type, display_names, display_p);
+    if (!refresh_displays(encoder.platform_formats->dev_type, display_names, display_p)) {
+      return;
+    }
     auto disp = platf::display(encoder.platform_formats->dev_type, display_names[display_p], capture_ctxs.front().config);
     if (!disp) {
       return;
@@ -1732,11 +1767,17 @@ namespace video {
               disp.reset();
 
               // Refresh display names since a display removal might have caused the reinitialization
-              refresh_displays(encoder.platform_formats->dev_type, display_names, display_p);
+              if (!refresh_displays(encoder.platform_formats->dev_type, display_names, display_p)) {
+                std::this_thread::sleep_for(200ms);
+                continue;
+              }
 
               // Process any pending display switch with the new list of displays
               if (switch_display_event->peek()) {
-                display_p = std::clamp(*switch_display_event->pop(), 0, static_cast<int>(display_names.size()) - 1);
+                const auto requested_display {switch_display_event->pop()};
+                if (config::video.dd.configuration_option != config::video_t::dd_t::config_option_e::vdd_only || config::video.output_name.empty()) {
+                  display_p = std::clamp(*requested_display, 0, static_cast<int>(display_names.size()) - 1);
+                }
               }
 
               // reset_display() will sleep between retries
@@ -2656,11 +2697,17 @@ namespace video {
 
     while (encode_session_ctx_queue.running()) {
       // Refresh display names since a display removal might have caused the reinitialization
-      refresh_displays(encoder.platform_formats->dev_type, display_names, display_p);
+      if (!refresh_displays(encoder.platform_formats->dev_type, display_names, display_p)) {
+        std::this_thread::sleep_for(200ms);
+        continue;
+      }
 
       // Process any pending display switch with the new list of displays
       if (switch_display_event->peek()) {
-        display_p = std::clamp(*switch_display_event->pop(), 0, static_cast<int>(display_names.size()) - 1);
+        const auto requested_display {switch_display_event->pop()};
+        if (config::video.dd.configuration_option != config::video_t::dd_t::config_option_e::vdd_only || config::video.output_name.empty()) {
+          display_p = std::clamp(*requested_display, 0, static_cast<int>(display_names.size()) - 1);
+        }
       }
 
       // reset_display() will sleep between retries
@@ -3015,7 +3062,12 @@ namespace video {
    * @brief Validate encoder before it is used.
    */
   bool validate_encoder(encoder_t &encoder, bool expect_failure) {
-    const auto output_name {display_device::map_output_name(config::video.output_name)};
+    const auto selection {display_device::get_display_selection(config::video)};
+    if (selection.unavailable) {
+      BOOST_LOG(error) << "The configured VDD is unavailable; skipping encoder validation."sv;
+      return false;
+    }
+    const auto &output_name {selection.mapped_display_name};
     std::shared_ptr<platf::display_t> disp;
 
     BOOST_LOG(info) << "Trying encoder ["sv << encoder.name << ']';
@@ -3364,9 +3416,9 @@ namespace video {
     }
 
     if (chosen_encoder == nullptr) {
-      const auto output_name {display_device::map_output_name(config::video.output_name)};
+      const auto selection {display_device::get_display_selection(config::video)};
       BOOST_LOG(fatal) << "Unable to find display or encoder during startup."sv;
-      if (!config::video.adapter_name.empty() || !output_name.empty()) {
+      if (!config::video.adapter_name.empty() || !selection.mapped_display_name.empty() || selection.unavailable) {
         BOOST_LOG(fatal) << "Please ensure your manually chosen GPU and monitor are connected and powered on."sv;
       } else {
         BOOST_LOG(fatal) << "Please check that a display is connected and powered on."sv;

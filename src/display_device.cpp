@@ -324,6 +324,8 @@ namespace display_device {
           return EnsurePrimary;
         case ensure_only_display:
           return EnsureOnlyDisplay;
+        case vdd_only:
+          return VerifyOnly;
         case disabled:
           break;
       }
@@ -810,6 +812,65 @@ namespace display_device {
     }
 
     return display_power->wakeDisplay(display_name, timeout);
+  }
+
+  DisplaySelection resolve_display_selection(const config::video_t &video_config, const EnumeratedDeviceList &devices) {
+    DisplaySelection selection {
+      .selected_device_id = video_config.output_name,
+      .mapped_display_name = {},
+      .unavailable = false
+    };
+
+    if (video_config.dd.configuration_option != config::video_t::dd_t::config_option_e::vdd_only || video_config.output_name.empty()) {
+      return selection;
+    }
+
+    const auto device_it {std::find_if(std::begin(devices), std::end(devices), [&device_id = video_config.output_name](const auto &device) {
+      return device.m_device_id == device_id;
+    })};
+    if (device_it == std::end(devices) || device_it->m_display_name.empty()) {
+      selection.unavailable = true;
+      return selection;
+    }
+
+    selection.mapped_display_name = device_it->m_display_name;
+    return selection;
+  }
+
+  DisplaySelection get_display_selection(const config::video_t &video_config) {
+    std::lock_guard lock {DD_DATA.mutex};
+
+    if (video_config.dd.configuration_option == config::video_t::dd_t::config_option_e::vdd_only) {
+      if (!DD_DATA.sm_instance) {
+        return resolve_display_selection(video_config, {});
+      }
+
+      const auto devices {DD_DATA.sm_instance->execute([](auto &settings_iface) {
+        return settings_iface.enumAvailableDevices();
+      })};
+      return resolve_display_selection(video_config, devices);
+    }
+
+    DisplaySelection selection {
+      .selected_device_id = video_config.output_name,
+      .mapped_display_name = video_config.output_name,
+      .unavailable = false
+    };
+    if (!DD_DATA.sm_instance) {
+      return selection;
+    }
+
+    selection.mapped_display_name = DD_DATA.sm_instance->execute([&device_id = video_config.output_name](auto &settings_iface) {
+      return settings_iface.getDisplayName(device_id);
+    });
+
+#ifdef __APPLE__
+    if (selection.mapped_display_name.empty() && is_unsigned_integer(video_config.output_name)) {
+      selection.mapped_display_name = video_config.output_name;
+    }
+#endif
+
+    return selection;
   }
 
   std::unique_ptr<DisplayPowerGuardInterface> keep_display_awake(const std::string &reason) {

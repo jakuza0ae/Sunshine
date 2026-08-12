@@ -29,6 +29,30 @@ namespace rtsp_stream {
 
 namespace display_device {
   /**
+   * @brief Resolved display selection used by display configuration and capture.
+   */
+  struct DisplaySelection {
+    std::string selected_device_id {};  ///< Stable device ID selected by configuration.
+    std::string mapped_display_name {};  ///< Current platform display name for the selected device.
+    bool unavailable {};  ///< True when an explicitly selected device is not currently available.
+  };
+
+  /**
+   * @brief Resolve a configured display device against an enumeration snapshot.
+   * @param video_config User's video related configuration.
+   * @param devices Enumerated display devices.
+   * @returns A stable selection result. Empty selections retain default platform behavior.
+   */
+  [[nodiscard]] DisplaySelection resolve_display_selection(const config::video_t &video_config, const EnumeratedDeviceList &devices);
+
+  /**
+   * @brief Resolve the configured display device against the current platform state.
+   * @param video_config User's video related configuration.
+   * @returns A stable selection result. Empty selections retain default platform behavior.
+   */
+  [[nodiscard]] DisplaySelection get_display_selection(const config::video_t &video_config);
+
+  /**
    * @brief Initialize the implementation and perform the initial state recovery (if needed).
    * @param persistence_filepath File location for reading/saving persistent state.
    * @param video_config User's video related configuration.

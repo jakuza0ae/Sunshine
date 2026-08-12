@@ -77,7 +77,8 @@ INSTANTIATE_TEST_SUITE_P(
     std::make_pair(config_option_e::verify_only, device_prep_t::VerifyOnly),
     std::make_pair(config_option_e::ensure_active, device_prep_t::EnsureActive),
     std::make_pair(config_option_e::ensure_primary, device_prep_t::EnsurePrimary),
-    std::make_pair(config_option_e::ensure_only_display, device_prep_t::EnsureOnlyDisplay)
+    std::make_pair(config_option_e::ensure_only_display, device_prep_t::EnsureOnlyDisplay),
+    std::make_pair(config_option_e::vdd_only, device_prep_t::VerifyOnly)
   )
 );
 
@@ -93,6 +94,69 @@ TEST_P(ParseConfigOption, IntegrationTest) {
   } else {
     ASSERT_EQ(std::get_if<display_device::configuration_disabled_tag_t>(&result) != nullptr, !expected_value);
   }
+}
+
+TEST(DisplayDeviceSelection, SelectedVddUsesCurrentDisplayName) {
+  config::video_t video_config {};
+  video_config.dd.configuration_option = config_option_e::vdd_only;
+  video_config.output_name = "vdd-guid";
+
+  const display_device::EnumeratedDeviceList devices {
+    {.m_device_id = "vdd-guid", .m_display_name = "\\\\.\\DISPLAY2"}
+  };
+
+  const auto result {display_device::resolve_display_selection(video_config, devices)};
+
+  EXPECT_EQ(result.selected_device_id, "vdd-guid");
+  EXPECT_EQ(result.mapped_display_name, "\\\\.\\DISPLAY2");
+  EXPECT_FALSE(result.unavailable);
+}
+
+TEST(DisplayDeviceSelection, MissingVddIsUnavailable) {
+  config::video_t video_config {};
+  video_config.dd.configuration_option = config_option_e::vdd_only;
+  video_config.output_name = "missing-vdd-guid";
+
+  const auto result {display_device::resolve_display_selection(video_config, {})};
+
+  EXPECT_EQ(result.selected_device_id, "missing-vdd-guid");
+  EXPECT_TRUE(result.mapped_display_name.empty());
+  EXPECT_TRUE(result.unavailable);
+}
+
+TEST(DisplayDeviceSelection, DeviceOrderDoesNotChangeSelectedVdd) {
+  config::video_t video_config {};
+  video_config.dd.configuration_option = config_option_e::vdd_only;
+  video_config.output_name = "vdd-guid";
+
+  const display_device::EnumeratedDeviceList first_order {
+    {.m_device_id = "vdd-guid", .m_display_name = "\\\\.\\DISPLAY2"},
+    {.m_device_id = "physical-guid", .m_display_name = "\\\\.\\DISPLAY1"}
+  };
+  const display_device::EnumeratedDeviceList second_order {
+    {.m_device_id = "physical-guid", .m_display_name = "\\\\.\\DISPLAY1"},
+    {.m_device_id = "vdd-guid", .m_display_name = "\\\\.\\DISPLAY2"}
+  };
+
+  const auto first_result {display_device::resolve_display_selection(video_config, first_order)};
+  const auto second_result {display_device::resolve_display_selection(video_config, second_order)};
+
+  EXPECT_EQ(first_result.selected_device_id, "vdd-guid");
+  EXPECT_EQ(second_result.selected_device_id, "vdd-guid");
+  EXPECT_EQ(first_result.mapped_display_name, second_result.mapped_display_name);
+  EXPECT_FALSE(first_result.unavailable);
+  EXPECT_FALSE(second_result.unavailable);
+}
+
+TEST(DisplayDeviceSelection, EmptySelectionRetainsDefaultBehavior) {
+  config::video_t video_config {};
+  video_config.dd.configuration_option = config_option_e::vdd_only;
+
+  const auto result {display_device::resolve_display_selection(video_config, {})};
+
+  EXPECT_TRUE(result.selected_device_id.empty());
+  EXPECT_TRUE(result.mapped_display_name.empty());
+  EXPECT_FALSE(result.unavailable);
 }
 
 using ParseHdrOption = DisplayDeviceConfigTest<std::pair<std::pair<hdr_option_e, client_wants_hdr_t>, std::optional<hdr_state_e>>>;

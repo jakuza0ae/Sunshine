@@ -1041,6 +1041,14 @@ namespace nvhttp {
       // The display should be restored in case something fails as there are no other sessions.
       revert_display_configuration = true;
 
+      const auto display_selection {display_device::get_display_selection(config::video)};
+      if (display_selection.unavailable) {
+        tree.put("root.<xmlattr>.status_code", 503);
+        tree.put("root.<xmlattr>.status_message", "The configured virtual display is unavailable");
+        tree.put("root.gamesession", 0);
+        return;
+      }
+
       // We want to prepare display only if there are no active sessions at
       // the moment. This should be done before probing encoders as it could
       // change the active displays.
@@ -1153,6 +1161,14 @@ namespace nvhttp {
     const auto launch_session = make_launch_session(host_audio, args);
 
     if (no_active_sessions) {
+      const auto display_selection {display_device::get_display_selection(config::video)};
+      if (display_selection.unavailable) {
+        tree.put("root.resume", 0);
+        tree.put("root.<xmlattr>.status_code", 503);
+        tree.put("root.<xmlattr>.status_message", "The configured virtual display is unavailable");
+        return;
+      }
+
       // We want to prepare display only if there are no active sessions at
       // the moment. This should be done before probing encoders as it could
       // change the active displays.
