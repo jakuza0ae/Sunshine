@@ -5,8 +5,10 @@
 #pragma once
 
 // standard includes
+#include <array>
 #include <bitset>
 #include <chrono>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -201,6 +203,28 @@ namespace config {
       mode_remapping_t mode_remapping;  ///< Display mode remapping rules grouped by automatic selection mode.
       workarounds_t wa;  ///< Display-device compatibility workarounds.
     } dd;  ///< Display-device integration settings.
+
+    /**
+     * @brief Opt-in profile for streaming an existing virtual display as a second monitor.
+     */
+    struct second_monitor_t {
+      std::string device_id {};  ///< Stable VDD device ID selected by the profile.
+      std::string resolution {"1280x720"};  ///< Fixed profile resolution.
+      int fps {30};  ///< Fixed profile frame rate.
+      bool hdr {false};  ///< Whether the profile permits HDR display configuration.
+      std::string capture_backend {"ddx"};  ///< Capture backend used by the profile.
+      bool stream_audio {false};  ///< Whether audio packets are sent for the profile.
+      dd_t::config_option_e display_policy {dd_t::config_option_e::disabled};  ///< Safe display policy for the profile.
+      bool restore_on_disconnect {true};  ///< Whether the saved display state is restored after the final session.
+
+      /**
+       * @brief Return whether this profile is enabled.
+       * @return True only when a VDD ID and the safe VDD-only policy are configured.
+       */
+      [[nodiscard]] bool enabled() const {
+        return !device_id.empty() && display_policy == dd_t::config_option_e::vdd_only;
+      }
+    } second_monitor;  ///< Optional second-monitor profile.
 
     int max_bitrate;  ///< Maximum bitrate ceiling in kbps for bitrate requested from the client.
     double minimum_fps_target;  ///< Lowest framerate that will be used when streaming. Range 0-1000, 0 = half of client's requested framerate.
@@ -399,4 +423,11 @@ namespace config {
    * @return Parsed configuration key-value entries.
    */
   std::unordered_map<std::string, std::string> parse_config(const std::string_view &file_content);
+
+  /**
+   * @brief Parse the strict second-monitor profile subset from configuration values.
+   * @param vars Parsed configuration entries.
+   * @return A profile, or an empty optional when the profile is invalid.
+   */
+  [[nodiscard]] std::optional<video_t::second_monitor_t> parse_second_monitor_profile(const std::unordered_map<std::string, std::string> &vars);
 }  // namespace config

@@ -6,9 +6,12 @@
 
 // standard includes
 #include <chrono>
+#include <cstddef>
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <string_view>
+#include <vector>
 
 // lib includes
 #include <display_device/display_power_interface.h>
@@ -28,6 +31,121 @@ namespace rtsp_stream {
 }
 
 namespace display_device {
+  /**
+   * @brief Lifecycle states reported for an enabled second-monitor profile.
+   */
+  enum class second_monitor_state_e {
+    waiting_for_vdd,
+    display_configuring,
+    capturing,
+    capture_reinitializing,
+    display_restore_pending,
+    display_restore_failed
+  };
+
+  /**
+   * @brief Convert a second-monitor lifecycle state to its API spelling.
+   */
+  [[nodiscard]] std::string_view second_monitor_state_name(second_monitor_state_e state);
+
+  /**
+   * @brief Secret-free display choice shown by the second-monitor selector.
+   */
+  struct second_monitor_device_status_t {
+    std::string device_id {};  ///< Stable display device ID.
+    std::string display_name {};  ///< Current platform output name.
+    std::string friendly_name {};  ///< Human-readable display name.
+    bool active {};  ///< Whether the display has a current output mapping.
+    bool virtual_device {};  ///< Whether the device is identified as virtual.
+    unsigned int current_width {};  ///< Current width when available.
+    unsigned int current_height {};  ///< Current height when available.
+  };
+
+  /**
+   * @brief Secret-free second-monitor lifecycle information.
+   */
+  struct second_monitor_status_t {
+    std::string state {"waiting_for_vdd"};  ///< Current second-monitor lifecycle state.
+    std::string selected_device_id {};  ///< Stable VDD device ID selected by the profile.
+    std::string mapped_output {};  ///< Current platform output name for the selected VDD.
+    std::string friendly_name {};  ///< Human-readable name of the selected device.
+    bool active {};  ///< Whether the selected device is currently enumerated.
+    bool virtual_device {};  ///< Whether the selected device is managed as a virtual display profile.
+    unsigned int current_width {};  ///< Current enumerated device width in pixels.
+    unsigned int current_height {};  ///< Current enumerated device height in pixels.
+    std::string capture_backend {};  ///< Capture backend selected for the active profile.
+    std::string encoder {};  ///< Encoder selected by the most recent probe.
+    unsigned int active_width {};  ///< Active profile width in pixels.
+    unsigned int active_height {};  ///< Active profile height in pixels.
+    unsigned int active_fps {};  ///< Active profile frame rate.
+    std::string last_reinitialization_reason {};  ///< Last bounded reason for capture reinitialization.
+    std::vector<second_monitor_device_status_t> devices {};  ///< Enumerated display choices for the selector.
+  };
+
+  /**
+   * @brief Testable ownership and lifecycle state for a second-monitor stream.
+   */
+  class second_monitor_lifecycle_t {
+  public:
+    void launch_requested(bool vdd_available);
+    void retry(bool vdd_available);
+    void capture_started(std::string selected_device_id, std::string mapped_output, std::string capture_backend, std::string encoder, unsigned int width, unsigned int height, unsigned int fps);
+    void capture_reinitializing(std::string reason);
+    void session_started();
+    [[nodiscard]] bool session_stopped(bool restore_enabled);
+    [[nodiscard]] bool launch_failed(bool restore_enabled);
+    [[nodiscard]] bool consume_restore_request();
+    void restore_finished(bool success);
+    [[nodiscard]] second_monitor_status_t status() const;
+
+  private:
+    second_monitor_state_e m_state {second_monitor_state_e::waiting_for_vdd};
+    second_monitor_status_t m_status {};
+    std::size_t m_session_owners {};
+    bool m_restore_scheduled {};
+    bool m_restore_request_pending {};
+  };
+
+  /**
+   * @brief Return the current secret-free second-monitor status snapshot.
+   */
+  [[nodiscard]] second_monitor_status_t second_monitor_status();
+
+  /**
+   * @brief Record the beginning of display configuration for an enabled profile.
+   */
+  void mark_display_configuration(bool vdd_available);
+
+  /**
+   * @brief Record the beginning of capture for an enabled profile.
+   */
+  void mark_capture_started(const std::string &selected_device_id, const std::string &mapped_output, unsigned int width, unsigned int height, unsigned int fps);
+
+  /**
+   * @brief Record a capture retry reason.
+   */
+  void mark_capture_reinitializing(std::string reason);
+
+  /**
+   * @brief Record a successfully owned stream session.
+   */
+  void mark_session_started();
+
+  /**
+   * @brief Record a stopped stream and return whether final restore should run.
+   */
+  [[nodiscard]] bool mark_session_stopped(bool restore_enabled);
+
+  /**
+   * @brief Record a failed launch and return whether final restore should run.
+   */
+  [[nodiscard]] bool mark_launch_failed(bool restore_enabled);
+
+  /**
+   * @brief Record the result of a scheduled display restore.
+   */
+  void mark_restore_finished(bool success);
+
   /**
    * @brief Resolved display selection used by display configuration and capture.
    */

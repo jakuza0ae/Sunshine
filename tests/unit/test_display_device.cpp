@@ -5,9 +5,12 @@
 #include "../tests_common.h"
 
 #include <format>
+#include <initializer_list>
 #include <src/config.h>
 #include <src/display_device.h>
 #include <src/rtsp.h>
+
+#include <unordered_map>
 
 namespace {
   using config_option_e = config::video_t::dd_t::config_option_e;
@@ -157,6 +160,159 @@ TEST(DisplayDeviceSelection, EmptySelectionRetainsDefaultBehavior) {
   EXPECT_TRUE(result.selected_device_id.empty());
   EXPECT_TRUE(result.mapped_display_name.empty());
   EXPECT_FALSE(result.unavailable);
+}
+
+TEST(SecondMonitorProfile, EmptyConfigIsOptedOutWithSafeDefaults) {
+  const auto profile {config::parse_second_monitor_profile({})};
+
+  ASSERT_TRUE(profile);
+  EXPECT_FALSE(profile->enabled());
+  EXPECT_TRUE(profile->device_id.empty());
+  EXPECT_EQ(profile->resolution, "1280x720");
+  EXPECT_EQ(profile->fps, 30);
+  EXPECT_FALSE(profile->hdr);
+  EXPECT_EQ(profile->capture_backend, "ddx");
+  EXPECT_FALSE(profile->stream_audio);
+  EXPECT_EQ(profile->display_policy, config_option_e::disabled);
+  EXPECT_TRUE(profile->restore_on_disconnect);
+}
+
+TEST(SecondMonitorProfile, RequiresDeviceIdWhenEnabled) {
+  const std::unordered_map<std::string, std::string> values {
+    {"second_monitor_resolution", "1280x720"},
+    {"second_monitor_fps", "30"},
+    {"second_monitor_display_policy", "vdd_only"}
+  };
+
+  EXPECT_FALSE(config::parse_second_monitor_profile(values));
+}
+
+TEST(SecondMonitorProfile, ParsesValidVddProfile) {
+  const std::unordered_map<std::string, std::string> values {
+    {"second_monitor_device_id", "{vdd-guid}"},
+    {"second_monitor_resolution", "1920x1080"},
+    {"second_monitor_fps", "60"},
+    {"second_monitor_hdr", "false"},
+    {"second_monitor_capture_backend", "wgc"},
+    {"second_monitor_stream_audio", "true"},
+    {"second_monitor_display_policy", "vdd_only"},
+    {"second_monitor_restore_on_disconnect", "true"}
+  };
+
+  const auto profile {config::parse_second_monitor_profile(values)};
+
+  ASSERT_TRUE(profile);
+  EXPECT_TRUE(profile->enabled());
+  EXPECT_EQ(profile->device_id, "{vdd-guid}");
+  EXPECT_EQ(profile->resolution, "1920x1080");
+  EXPECT_EQ(profile->fps, 60);
+  EXPECT_FALSE(profile->hdr);
+  EXPECT_EQ(profile->capture_backend, "wgc");
+  EXPECT_TRUE(profile->stream_audio);
+  EXPECT_EQ(profile->display_policy, config_option_e::vdd_only);
+  EXPECT_TRUE(profile->restore_on_disconnect);
+}
+
+TEST(SecondMonitorProfile, RejectsUnsafePolicyAndInvalidRanges) {
+  for (const auto &[key, value] : std::initializer_list<std::pair<std::string, std::string>> {
+         {"second_monitor_display_policy", "ensure_primary"},
+         {"second_monitor_resolution", "0x720"},
+         {"second_monitor_resolution", "7681x4320"},
+         {"second_monitor_fps", "0"},
+         {"second_monitor_fps", "241"}
+       }) {
+    const std::unordered_map<std::string, std::string> values {
+      {"second_monitor_device_id", "{vdd-guid}"},
+      {key, value}
+    };
+
+    EXPECT_FALSE(config::parse_second_monitor_profile(values)) << key << '=' << value;
+  }
+}
+
+TEST(SecondMonitorProfile, RejectsUnknownProfileFields) {
+  const std::unordered_map<std::string, std::string> values {
+    {"second_monitor_device_id", "{vdd-guid}"},
+    {"second_monitor_arbitrary_command", "whoami"}
+  };
+
+  EXPECT_FALSE(config::parse_second_monitor_profile(values));
+}
+
+TEST(SecondMonitorProfile, UsesFixedDisplayModeWithoutClientSops) {
+  config::video_t video_config {};
+  video_config.second_monitor.device_id = "{vdd-guid}";
+  video_config.second_monitor.resolution = "1280x720";
+  video_config.second_monitor.fps = 30;
+  video_config.second_monitor.hdr = true;
+  video_config.second_monitor.display_policy = config_option_e::vdd_only;
+  video_config.dd.configuration_option = config_option_e::vdd_only;
+  video_config.dd.resolution_option = resolution_option_e::manual;
+  video_config.dd.manual_resolution = video_config.second_monitor.resolution;
+  video_config.dd.refresh_rate_option = refresh_rate_option_e::manual;
+  video_config.dd.manual_refresh_rate = "30";
+  video_config.dd.hdr_option = hdr_option_e::automatic;
+
+  rtsp_stream::launch_session_t session {};
+  session.enable_sops = false;
+  session.enable_hdr = false;
+
+  const auto result {display_device::parse_configuration(video_config, session)};
+  const auto &parsed {std::get<display_device::SingleDisplayConfiguration>(result)};
+
+  EXPECT_EQ(parsed.m_resolution, std::optional<resolution_t> {{1280, 720}});
+  EXPECT_EQ(parsed.m_refresh_rate, std::optional<display_device::FloatingPoint> {rational_t {30, 1}});
+  EXPECT_EQ(parsed.m_hdr_state, std::optional<hdr_state_e> {hdr_state_e::Enabled});
+}
+
+TEST(SecondMonitorLifecycle, VddAppearingDuringRetryMovesToConfiguration) {
+  display_device::second_monitor_lifecycle_t lifecycle;
+
+  lifecycle.launch_requested(false);
+  EXPECT_EQ(lifecycle.status().state, "waiting_for_vdd");
+
+  lifecycle.retry(false);
+  EXPECT_EQ(lifecycle.status().state, "waiting_for_vdd");
+
+  lifecycle.retry(true);
+  EXPECT_EQ(lifecycle.status().state, "display_configuring");
+}
+
+TEST(SecondMonitorLifecycle, FailedLaunchSchedulesOneRestore) {
+  display_device::second_monitor_lifecycle_t lifecycle;
+
+  lifecycle.launch_requested(true);
+  EXPECT_TRUE(lifecycle.launch_failed(true));
+  EXPECT_EQ(lifecycle.status().state, "display_restore_pending");
+  EXPECT_FALSE(lifecycle.launch_failed(true));
+
+  lifecycle.restore_finished(false);
+  EXPECT_EQ(lifecycle.status().state, "display_restore_failed");
+}
+
+TEST(SecondMonitorLifecycle, FinalOwnerRestoresAfterSharedSessionsEnd) {
+  display_device::second_monitor_lifecycle_t lifecycle;
+
+  lifecycle.capture_started("{vdd-guid}", "\\\\.\\DISPLAY2", "ddx", "h264_amf", 1280, 720, 30);
+  lifecycle.session_started();
+  lifecycle.session_started();
+
+  EXPECT_FALSE(lifecycle.session_stopped(true));
+  EXPECT_EQ(lifecycle.status().state, "capturing");
+  EXPECT_TRUE(lifecycle.session_stopped(true));
+  EXPECT_EQ(lifecycle.status().state, "display_restore_pending");
+  EXPECT_TRUE(lifecycle.consume_restore_request());
+  EXPECT_FALSE(lifecycle.consume_restore_request());
+  EXPECT_FALSE(lifecycle.session_stopped(true));
+}
+
+TEST(SecondMonitorLifecycle, CaptureReinitializationKeepsReasonInDiagnostics) {
+  display_device::second_monitor_lifecycle_t lifecycle;
+
+  lifecycle.capture_reinitializing("VDD hotplug");
+
+  EXPECT_EQ(lifecycle.status().state, "capture_reinitializing");
+  EXPECT_EQ(lifecycle.status().last_reinitialization_reason, "VDD hotplug");
 }
 
 using ParseHdrOption = DisplayDeviceConfigTest<std::pair<std::pair<hdr_option_e, client_wants_hdr_t>, std::optional<hdr_state_e>>>;

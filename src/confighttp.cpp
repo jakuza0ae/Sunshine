@@ -1028,6 +1028,51 @@ namespace confighttp {
   }
 
   /**
+   * @brief Get the current second-monitor lifecycle and display mapping.
+   * @param response HTTP response object to populate.
+   * @param request HTTP request object from the authenticated Web UI.
+   *
+   * @api_examples{/api/second-monitor/status| GET| null}
+   */
+  void getSecondMonitorStatus(const resp_https_t &response, const req_https_t &request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    const auto status {display_device::second_monitor_status()};
+    nlohmann::json devices = nlohmann::json::array();
+    for (const auto &device : status.devices) {
+      devices.push_back({
+        {"device_id", device.device_id},
+        {"display_name", device.display_name},
+        {"friendly_name", device.friendly_name},
+        {"active", device.active},
+        {"virtual_device", device.virtual_device},
+        {"current_resolution", std::format("{}x{}", device.current_width, device.current_height)}
+      });
+    }
+    nlohmann::json output_tree {
+      {"state", status.state},
+      {"selected_device_id", status.selected_device_id},
+      {"mapped_output", status.mapped_output},
+      {"friendly_name", status.friendly_name},
+      {"active", status.active},
+      {"virtual_device", status.virtual_device},
+      {"current_resolution", std::format("{}x{}", status.current_width, status.current_height)},
+      {"devices", std::move(devices)},
+      {"capture_backend", status.capture_backend},
+      {"encoder", status.encoder},
+      {"resolution", std::format("{}x{}", status.active_width, status.active_height)},
+      {"fps", status.active_fps},
+      {"last_reinitialization_reason", status.last_reinitialization_reason}
+    };
+    output_tree["status"] = true;
+    send_response(response, output_tree);
+  }
+
+  /**
    * @brief Get the locale setting. This endpoint does not require authentication.
    * @param response The HTTP response object.
    * @param request The HTTP request object.
@@ -1803,6 +1848,7 @@ namespace confighttp {
     server.resource["^/api/clients/update$"]["POST"] = updateClient;
     server.resource["^/api/config$"]["GET"] = getConfig;
     server.resource["^/api/config$"]["POST"] = saveConfig;
+    server.resource["^/api/second-monitor/status$"]["GET"] = getSecondMonitorStatus;
     server.resource["^/api/configLocale$"]["GET"] = getLocale;
     server.resource["^/api/covers/([0-9]+)$"]["GET"] = getCover;
     server.resource["^/api/covers/upload$"]["POST"] = uploadCover;

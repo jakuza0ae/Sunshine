@@ -6,6 +6,7 @@
 #define BOOST_BIND_GLOBAL_PLACEHOLDERS
 
 // standard includes
+#include <algorithm>
 #include <filesystem>
 #include <format>
 #include <string>
@@ -1043,11 +1044,14 @@ namespace nvhttp {
 
       const auto display_selection {display_device::get_display_selection(config::video)};
       if (display_selection.unavailable) {
+        display_device::mark_display_configuration(false);
         tree.put("root.<xmlattr>.status_code", 503);
         tree.put("root.<xmlattr>.status_message", "The configured virtual display is unavailable");
         tree.put("root.gamesession", 0);
         return;
       }
+
+      display_device::mark_display_configuration(true);
 
       // We want to prepare display only if there are no active sessions at
       // the moment. This should be done before probing encoders as it could
@@ -1065,6 +1069,14 @@ namespace nvhttp {
 
         return;
       }
+
+      display_device::mark_capture_started(
+        display_selection.selected_device_id,
+        display_selection.mapped_display_name,
+        static_cast<unsigned int>(std::max(0, launch_session->width)),
+        static_cast<unsigned int>(std::max(0, launch_session->height)),
+        static_cast<unsigned int>(std::max(0, launch_session->fps))
+      );
     }
 
     auto encryption_mode = net::encryption_mode_for_address(request->remote_endpoint().address());
@@ -1163,11 +1175,14 @@ namespace nvhttp {
     if (no_active_sessions) {
       const auto display_selection {display_device::get_display_selection(config::video)};
       if (display_selection.unavailable) {
+        display_device::mark_display_configuration(false);
         tree.put("root.resume", 0);
         tree.put("root.<xmlattr>.status_code", 503);
         tree.put("root.<xmlattr>.status_message", "The configured virtual display is unavailable");
         return;
       }
+
+      display_device::mark_display_configuration(true);
 
       // We want to prepare display only if there are no active sessions at
       // the moment. This should be done before probing encoders as it could
@@ -1185,6 +1200,14 @@ namespace nvhttp {
 
         return;
       }
+
+      display_device::mark_capture_started(
+        display_selection.selected_device_id,
+        display_selection.mapped_display_name,
+        static_cast<unsigned int>(std::max(0, launch_session->width)),
+        static_cast<unsigned int>(std::max(0, launch_session->height)),
+        static_cast<unsigned int>(std::max(0, launch_session->fps))
+      );
     }
 
     auto encryption_mode = net::encryption_mode_for_address(request->remote_endpoint().address());

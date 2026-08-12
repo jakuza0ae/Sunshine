@@ -667,3 +667,23 @@ TEST_F(ConfigConsistencyTest, TestFrameworkDetectsMissingOptions) {
   // Verify we have at least 3 missing entries (one for each file type)
   EXPECT_GE(missingFromFiles.size(), 3) << "Test framework should detect missing dummy option in all three file types";
 }
+
+TEST_F(ConfigConsistencyTest, SecondMonitorProfileUsesExplicitFields) {
+  const std::string content = file_handler::read_file("src/config.cpp");
+  const std::vector<std::string> profile_fields {
+    "second_monitor_device_id",
+    "second_monitor_resolution",
+    "second_monitor_fps",
+    "second_monitor_hdr",
+    "second_monitor_capture_backend",
+    "second_monitor_stream_audio",
+    "second_monitor_display_policy",
+    "second_monitor_restore_on_disconnect"
+  };
+
+  for (const auto &field : profile_fields) {
+    EXPECT_NE(content.find(field), std::string::npos) << "Profile field is not represented in the strict parser: " << field;
+  }
+
+  EXPECT_EQ(content.find("second_monitor_arbitrary_command"), std::string::npos);
+}

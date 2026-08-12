@@ -22,6 +22,7 @@
 
 // local includes
 #include "audio.h"
+#include "config.h"
 #include "platform/common.h"
 #include "rtsp.h"
 
@@ -48,8 +49,10 @@ namespace display_device {
      */
     struct {
       std::mutex mutex {};
+      std::mutex lifecycle_mutex {};
       std::chrono::milliseconds config_revert_delay {0};
       std::unique_ptr<RetryScheduler<SettingsManagerInterface>> sm_instance {nullptr};
+      second_monitor_lifecycle_t lifecycle {};
     } DD_DATA;
 
     /**
@@ -148,6 +151,14 @@ namespace display_device {
       });
     }
 #endif
+
+    bool looks_like_virtual_device(const EnumeratedDevice &device) {
+      std::string name {device.m_friendly_name};
+      std::ranges::transform(name, std::begin(name), [](const unsigned char character) {
+        return static_cast<char>(std::tolower(character));
+      });
+      return name.contains("virtual") || name.contains("vdd");
+    }
 
     std::string_view apply_result_name(SettingsManagerInterface::ApplyResult result) {
       using enum SettingsManagerInterface::ApplyResult;
@@ -354,7 +365,7 @@ namespace display_device {
       switch (video_config.dd.resolution_option) {
         case resolution_option_e::automatic:
           {
-            if (!session.enable_sops) {
+            if (!session.enable_sops && !video_config.second_monitor.enabled()) {
               BOOST_LOG(warning) << R"(Sunshine is configured to change resolution automatically, but the "Optimize game settings" is not set in the client! Resolution will not be changed.)";
             } else if (session.width >= 0 && session.height >= 0) {
               config.m_resolution = Resolution {
@@ -369,7 +380,7 @@ namespace display_device {
           }
         case resolution_option_e::manual:
           {
-            if (!session.enable_sops) {
+            if (!session.enable_sops && !video_config.second_monitor.enabled()) {
               BOOST_LOG(warning) << R"(Sunshine is configured to change resolution manually, but the "Optimize game settings" is not set in the client! Resolution will not be changed.)";
             } else {
               if (!parse_resolution_string(video_config.dd.manual_resolution, config.m_resolution)) {
@@ -455,6 +466,10 @@ namespace display_device {
      */
     std::optional<HdrState> parse_hdr_option(const config::video_t &video_config, const rtsp_stream::launch_session_t &session) {
       using hdr_option_e = config::video_t::dd_t::hdr_option_e;
+
+      if (video_config.second_monitor.enabled()) {
+        return video_config.second_monitor.hdr ? HdrState::Enabled : HdrState::Disabled;
+      }
 
       switch (video_config.dd.hdr_option) {
         case hdr_option_e::automatic:
@@ -717,7 +732,11 @@ namespace display_device {
 
       DD_DATA.sm_instance->schedule([try_once = (option == revert_option_e::try_once), tried_out_devices = StringSet {}](auto &settings_iface, auto &stop_token) mutable {
         if (try_once) {
-          std::ignore = settings_iface.revertSettings();
+          const auto result {settings_iface.revertSettings()};
+          if (config::video.second_monitor.enabled()) {
+            std::lock_guard lifecycle_lock {DD_DATA.lifecycle_mutex};
+            DD_DATA.lifecycle.restore_finished(result == SettingsManagerInterface::RevertResult::Ok);
+          }
           stop_token.requestStop();
           return;
         }
@@ -745,6 +764,10 @@ namespace display_device {
 
         using enum SettingsManagerInterface::RevertResult;
         if (const auto result {settings_iface.revertSettings()}; result == Ok) {
+          if (config::video.second_monitor.enabled()) {
+            std::lock_guard lifecycle_lock {DD_DATA.lifecycle_mutex};
+            DD_DATA.lifecycle.restore_finished(true);
+          }
           stop_token.requestStop();
           return;
         } else if (result == ApiTemporarilyUnavailable) {
@@ -753,6 +776,10 @@ namespace display_device {
         }
 
         // If we have failed to revert settings then we will try to do it next time only if a device was added/removed
+        if (config::video.second_monitor.enabled()) {
+          std::lock_guard lifecycle_lock {DD_DATA.lifecycle_mutex};
+          DD_DATA.lifecycle.restore_finished(false);
+        }
         BOOST_LOG(warning) << "Failed to revert display device configuration (will retry once devices are added or removed). Enabling all of the available devices:\n"
                            << toJson(available_devices);
         tried_out_devices.swap(available_devices);
@@ -761,12 +788,235 @@ namespace display_device {
     }
   }  // namespace
 
+  std::string_view second_monitor_state_name(const second_monitor_state_e state) {
+    switch (state) {
+      case second_monitor_state_e::waiting_for_vdd:
+        return "waiting_for_vdd";
+      case second_monitor_state_e::display_configuring:
+        return "display_configuring";
+      case second_monitor_state_e::capturing:
+        return "capturing";
+      case second_monitor_state_e::capture_reinitializing:
+        return "capture_reinitializing";
+      case second_monitor_state_e::display_restore_pending:
+        return "display_restore_pending";
+      case second_monitor_state_e::display_restore_failed:
+        return "display_restore_failed";
+    }
+
+    return "waiting_for_vdd";
+  }
+
+  void second_monitor_lifecycle_t::launch_requested(const bool vdd_available) {
+    m_restore_scheduled = false;
+    m_restore_request_pending = false;
+    m_state = vdd_available ? second_monitor_state_e::display_configuring : second_monitor_state_e::waiting_for_vdd;
+    m_status.state = std::string {second_monitor_state_name(m_state)};
+  }
+
+  void second_monitor_lifecycle_t::retry(const bool vdd_available) {
+    m_state = vdd_available ? second_monitor_state_e::display_configuring : second_monitor_state_e::waiting_for_vdd;
+    m_status.state = std::string {second_monitor_state_name(m_state)};
+  }
+
+  void second_monitor_lifecycle_t::capture_started(std::string selected_device_id, std::string mapped_output, std::string capture_backend, std::string encoder, const unsigned int width, const unsigned int height, const unsigned int fps) {
+    m_status.selected_device_id = std::move(selected_device_id);
+    m_status.mapped_output = std::move(mapped_output);
+    m_status.capture_backend = std::move(capture_backend);
+    m_status.encoder = std::move(encoder);
+    m_status.active_width = width;
+    m_status.active_height = height;
+    m_status.active_fps = fps;
+    m_state = second_monitor_state_e::capturing;
+    m_status.state = std::string {second_monitor_state_name(m_state)};
+  }
+
+  void second_monitor_lifecycle_t::capture_reinitializing(std::string reason) {
+    m_status.last_reinitialization_reason = std::move(reason);
+    m_state = second_monitor_state_e::capture_reinitializing;
+    m_status.state = std::string {second_monitor_state_name(m_state)};
+  }
+
+  void second_monitor_lifecycle_t::session_started() {
+    ++m_session_owners;
+    m_state = second_monitor_state_e::capturing;
+    m_status.state = std::string {second_monitor_state_name(m_state)};
+  }
+
+  bool second_monitor_lifecycle_t::session_stopped(const bool restore_enabled) {
+    if (m_session_owners == 0) {
+      return false;
+    }
+
+    --m_session_owners;
+    if (m_session_owners != 0 || !restore_enabled || m_restore_scheduled) {
+      return false;
+    }
+
+    m_restore_scheduled = true;
+    m_restore_request_pending = true;
+    m_state = second_monitor_state_e::display_restore_pending;
+    m_status.state = std::string {second_monitor_state_name(m_state)};
+    return true;
+  }
+
+  bool second_monitor_lifecycle_t::launch_failed(const bool restore_enabled) {
+    if (!restore_enabled || m_restore_scheduled) {
+      return false;
+    }
+
+    m_restore_scheduled = true;
+    m_restore_request_pending = true;
+    m_state = second_monitor_state_e::display_restore_pending;
+    m_status.state = std::string {second_monitor_state_name(m_state)};
+    return true;
+  }
+
+  bool second_monitor_lifecycle_t::consume_restore_request() {
+    if (!m_restore_request_pending) {
+      return false;
+    }
+
+    m_restore_request_pending = false;
+    return true;
+  }
+
+  void second_monitor_lifecycle_t::restore_finished(const bool success) {
+    m_restore_request_pending = false;
+    m_state = success ? second_monitor_state_e::waiting_for_vdd : second_monitor_state_e::display_restore_failed;
+    m_status.state = std::string {second_monitor_state_name(m_state)};
+  }
+
+  second_monitor_status_t second_monitor_lifecycle_t::status() const {
+    auto result {m_status};
+    result.state = std::string {second_monitor_state_name(m_state)};
+    return result;
+  }
+
+  second_monitor_status_t second_monitor_status() {
+    std::lock_guard lock {DD_DATA.mutex};
+    std::lock_guard lifecycle_lock {DD_DATA.lifecycle_mutex};
+    auto status {DD_DATA.lifecycle.status()};
+    const bool profile_enabled {config::video.second_monitor.enabled()};
+
+    const auto devices {DD_DATA.sm_instance ? DD_DATA.sm_instance->execute([](auto &settings_iface) {
+      return settings_iface.enumAvailableDevices();
+    }) : EnumeratedDeviceList {}};
+    status.devices.reserve(devices.size());
+    for (const auto &device : devices) {
+      status.devices.push_back(second_monitor_device_status_t {
+        .device_id = device.m_device_id,
+        .display_name = device.m_display_name,
+        .friendly_name = device.m_friendly_name,
+        .active = !device.m_display_name.empty(),
+        .virtual_device = looks_like_virtual_device(device) || (profile_enabled && device.m_device_id == config::video.second_monitor.device_id),
+        .current_width = device.m_info ? device.m_info->m_resolution.m_width : 0,
+        .current_height = device.m_info ? device.m_info->m_resolution.m_height : 0
+      });
+    }
+
+    if (!profile_enabled) {
+      return status;
+    }
+
+    status.selected_device_id = config::video.second_monitor.device_id;
+    status.capture_backend = config::video.second_monitor.capture_backend;
+    status.virtual_device = true;
+
+    const auto selection {resolve_display_selection(config::video, devices)};
+    status.mapped_output = selection.mapped_display_name;
+    if (const auto device_it {std::find_if(std::begin(devices), std::end(devices), [&status](const auto &device) {
+          return device.m_device_id == status.selected_device_id;
+        })}; device_it != std::end(devices)) {
+      status.active = !device_it->m_display_name.empty();
+      status.friendly_name = device_it->m_friendly_name;
+      if (device_it->m_info) {
+        status.current_width = device_it->m_info->m_resolution.m_width;
+        status.current_height = device_it->m_info->m_resolution.m_height;
+      }
+    }
+    if (selection.unavailable && status.state != "display_restore_pending" && status.state != "display_restore_failed") {
+      status.state = "waiting_for_vdd";
+    }
+
+    return status;
+  }
+
+  void mark_display_configuration(const bool vdd_available) {
+    std::lock_guard lock {DD_DATA.mutex};
+    std::lock_guard lifecycle_lock {DD_DATA.lifecycle_mutex};
+    if (config::video.second_monitor.enabled()) {
+      DD_DATA.lifecycle.launch_requested(vdd_available);
+    }
+  }
+
+  void mark_capture_started(const std::string &selected_device_id, const std::string &mapped_output, const unsigned int width, const unsigned int height, const unsigned int fps) {
+    std::lock_guard lock {DD_DATA.mutex};
+    std::lock_guard lifecycle_lock {DD_DATA.lifecycle_mutex};
+    if (config::video.second_monitor.enabled()) {
+      std::optional<Resolution> profile_resolution;
+      if (parse_resolution_string(config::video.second_monitor.resolution, profile_resolution) && profile_resolution) {
+        DD_DATA.lifecycle.capture_started(
+          selected_device_id,
+          mapped_output,
+          config::video.capture,
+          config::video.encoder,
+          profile_resolution->m_width,
+          profile_resolution->m_height,
+          static_cast<unsigned int>(config::video.second_monitor.fps)
+        );
+      } else {
+        DD_DATA.lifecycle.capture_started(selected_device_id, mapped_output, config::video.capture, config::video.encoder, width, height, fps);
+      }
+    }
+  }
+
+  void mark_capture_reinitializing(std::string reason) {
+    std::lock_guard lock {DD_DATA.mutex};
+    std::lock_guard lifecycle_lock {DD_DATA.lifecycle_mutex};
+    if (config::video.second_monitor.enabled()) {
+      DD_DATA.lifecycle.capture_reinitializing(std::move(reason));
+    }
+  }
+
+  void mark_session_started() {
+    std::lock_guard lock {DD_DATA.mutex};
+    std::lock_guard lifecycle_lock {DD_DATA.lifecycle_mutex};
+    if (config::video.second_monitor.enabled()) {
+      DD_DATA.lifecycle.session_started();
+    }
+  }
+
+  bool mark_session_stopped(const bool restore_enabled) {
+    std::lock_guard lock {DD_DATA.mutex};
+    std::lock_guard lifecycle_lock {DD_DATA.lifecycle_mutex};
+    return config::video.second_monitor.enabled() && DD_DATA.lifecycle.session_stopped(restore_enabled);
+  }
+
+  bool mark_launch_failed(const bool restore_enabled) {
+    std::lock_guard lock {DD_DATA.mutex};
+    std::lock_guard lifecycle_lock {DD_DATA.lifecycle_mutex};
+    return config::video.second_monitor.enabled() && DD_DATA.lifecycle.launch_failed(restore_enabled);
+  }
+
+  void mark_restore_finished(const bool success) {
+    std::lock_guard lock {DD_DATA.mutex};
+    std::lock_guard lifecycle_lock {DD_DATA.lifecycle_mutex};
+    if (config::video.second_monitor.enabled()) {
+      DD_DATA.lifecycle.restore_finished(success);
+    }
+  }
+
   std::unique_ptr<platf::deinit_t> init(const std::filesystem::path &persistence_filepath, const config::video_t &video_config) {
     std::lock_guard lock {DD_DATA.mutex};
     // We can support re-init without any issues, however we should make sure to clean up first!
     revert_configuration_unlocked(revert_option_e::try_once);
     DD_DATA.config_revert_delay = video_config.dd.config_revert_delay;
     DD_DATA.sm_instance = nullptr;
+    {
+      std::lock_guard lifecycle_lock {DD_DATA.lifecycle_mutex};
+      DD_DATA.lifecycle = second_monitor_lifecycle_t {};
+    }
 
     // If we fail to create settings manager, this means platform is not supported, and
     // we will need to provided error-free pass-trough in other methods
@@ -939,6 +1189,10 @@ namespace display_device {
       if (result == Ok) {
         BOOST_LOG(info) << "Display device configuration applied successfully.";
       } else if (result == ApiTemporarilyUnavailable) {
+        if (config::video.second_monitor.enabled()) {
+          std::lock_guard lifecycle_lock {DD_DATA.lifecycle_mutex};
+          DD_DATA.lifecycle.capture_reinitializing("display configuration temporarily unavailable");
+        }
         BOOST_LOG(warning) << "Display device configuration API is temporarily unavailable. Will retry.";
       } else {
         BOOST_LOG(error) << "Display device configuration failed with result: " << apply_result_name(result);
@@ -953,6 +1207,19 @@ namespace display_device {
 
   void revert_configuration() {
     std::lock_guard lock {DD_DATA.mutex};
+    if (config::video.second_monitor.enabled()) {
+      {
+        std::lock_guard lifecycle_lock {DD_DATA.lifecycle_mutex};
+        DD_DATA.lifecycle.launch_failed(config::video.second_monitor.restore_on_disconnect);
+        if (!DD_DATA.lifecycle.consume_restore_request()) {
+          return;
+        }
+        if (!DD_DATA.sm_instance) {
+          DD_DATA.lifecycle.restore_finished(false);
+          return;
+        }
+      }
+    }
     revert_configuration_unlocked(revert_option_e::try_indefinitely_with_delay);
   }
 

@@ -2181,6 +2181,8 @@ namespace stream {
       BOOST_LOG(debug) << "Resetting Input..."sv;
       input::reset(session.input);
 
+      const bool restore_second_monitor {display_device::mark_session_stopped(config::video.second_monitor.restore_on_disconnect)};
+
       // If this is the last session, invoke the platform callbacks
       if (--running_sessions == 0) {
         bool revert_display_config {config::video.dd.config_revert_on_disconnect};
@@ -2193,7 +2195,7 @@ namespace stream {
           revert_display_config = true;
         }
 
-        if (revert_display_config) {
+        if (revert_display_config || restore_second_monitor) {
           display_device::revert_configuration();
         }
 
@@ -2211,6 +2213,7 @@ namespace stream {
 
       session.broadcast_ref = broadcast.ref();
       if (!session.broadcast_ref) {
+        display_device::mark_launch_failed(config::video.second_monitor.restore_on_disconnect);
         return -1;
       }
 
@@ -2244,6 +2247,8 @@ namespace stream {
         system_tray::update_tray_playing(proc::proc.get_last_run_app_name());
 #endif
       }
+
+      display_device::mark_session_started();
 
       return 0;
     }

@@ -4,6 +4,8 @@
  */
 // standard includes
 #include <algorithm>
+#include <charconv>
+#include <cctype>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -706,6 +708,178 @@ namespace config {
     }
   }  // namespace dd
 
+  namespace {
+    constexpr std::array SECOND_MONITOR_KEYS {
+      "second_monitor_device_id"sv,
+      "second_monitor_resolution"sv,
+      "second_monitor_fps"sv,
+      "second_monitor_hdr"sv,
+      "second_monitor_capture_backend"sv,
+      "second_monitor_stream_audio"sv,
+      "second_monitor_display_policy"sv,
+      "second_monitor_restore_on_disconnect"sv
+    };
+
+    bool is_second_monitor_key(const std::string_view key) {
+      return key.starts_with("second_monitor_"sv);
+    }
+
+    bool is_known_second_monitor_key(const std::string_view key) {
+      return std::ranges::find(SECOND_MONITOR_KEYS, key) != std::end(SECOND_MONITOR_KEYS);
+    }
+
+    std::string second_monitor_value(const std::unordered_map<std::string, std::string> &vars, const std::string_view key, const std::string_view default_value = {}) {
+      const auto it {vars.find(std::string {key})};
+      if (it == std::end(vars)) {
+        return std::string {default_value};
+      }
+
+      std::string value {it->second};
+      auto begin {value.find_first_not_of(" \t\r\n")};
+      auto end {value.find_last_not_of(" \t\r\n")};
+      if (begin == std::string::npos) {
+        return {};
+      }
+      value = value.substr(begin, end - begin + 1);
+
+      if (value.size() >= 2 && value.front() == '"' && value.back() == '"') {
+        value = value.substr(1, value.size() - 2);
+      }
+
+      return value;
+    }
+
+    std::optional<unsigned int> second_monitor_unsigned(const std::string_view value) {
+      unsigned int output {};
+      const auto [end, error] {std::from_chars(value.data(), value.data() + value.size(), output)};
+      if (error != std::errc {} || end != value.data() + value.size()) {
+        return std::nullopt;
+      }
+      return output;
+    }
+
+    std::optional<std::pair<unsigned int, unsigned int>> second_monitor_resolution(const std::string_view value) {
+      const auto separator {value.find('x')};
+      if (separator == std::string_view::npos || value.find('x', separator + 1) != std::string_view::npos) {
+        return std::nullopt;
+      }
+
+      const auto width {second_monitor_unsigned(value.substr(0, separator))};
+      const auto height {second_monitor_unsigned(value.substr(separator + 1))};
+      if (!width || !height || *width == 0 || *width > 7680 || *height == 0 || *height > 4320) {
+        return std::nullopt;
+      }
+
+      return std::make_pair(*width, *height);
+    }
+
+    std::optional<bool> second_monitor_bool(const std::string_view value) {
+      std::string normalized {value};
+      std::ranges::transform(normalized, std::begin(normalized), [](const unsigned char character) {
+        return static_cast<char>(std::tolower(character));
+      });
+
+      if (normalized == "true" || normalized == "yes" || normalized == "enabled" || normalized == "on" || normalized == "1") {
+        return true;
+      }
+      if (normalized == "false" || normalized == "no" || normalized == "disabled" || normalized == "off" || normalized == "0") {
+        return false;
+      }
+      return std::nullopt;
+    }
+
+    void erase_second_monitor_keys(std::unordered_map<std::string, std::string> &vars) {
+      for (const auto key : SECOND_MONITOR_KEYS) {
+        vars.erase(std::string {key});
+      }
+    }
+  }  // namespace
+
+  std::optional<video_t::second_monitor_t> parse_second_monitor_profile(const std::unordered_map<std::string, std::string> &vars) {
+    const bool has_profile_values {std::ranges::any_of(vars, [](const auto &entry) {
+      return is_second_monitor_key(entry.first);
+    })};
+    if (!has_profile_values) {
+      return video_t::second_monitor_t {};
+    }
+
+    for (const auto &[key, _] : vars) {
+      if (is_second_monitor_key(key) && !is_known_second_monitor_key(key)) {
+        BOOST_LOG(warning) << "config: unknown second-monitor profile field: " << key;
+        return std::nullopt;
+      }
+    }
+
+    video_t::second_monitor_t profile {};
+    profile.device_id = second_monitor_value(vars, "second_monitor_device_id"sv);
+    if (profile.device_id.empty()) {
+      BOOST_LOG(warning) << "config: second-monitor profile requires second_monitor_device_id";
+      return std::nullopt;
+    }
+
+    if (const auto value {second_monitor_value(vars, "second_monitor_resolution"sv, profile.resolution)}; !second_monitor_resolution(value)) {
+      BOOST_LOG(warning) << "config: second-monitor resolution must be between 1x1 and 7680x4320";
+      return std::nullopt;
+    } else {
+      profile.resolution = value;
+    }
+
+    if (const auto value {second_monitor_value(vars, "second_monitor_fps"sv, std::to_string(profile.fps))}; value.empty()) {
+      return std::nullopt;
+    } else if (const auto fps {second_monitor_unsigned(value)}; !fps || *fps < 1 || *fps > 240) {
+      BOOST_LOG(warning) << "config: second-monitor FPS must be between 1 and 240";
+      return std::nullopt;
+    } else {
+      profile.fps = static_cast<int>(*fps);
+    }
+
+    if (const auto it {vars.find("second_monitor_hdr")}; it != std::end(vars)) {
+      const auto value {second_monitor_bool(second_monitor_value(vars, "second_monitor_hdr"sv))};
+      if (!value) {
+        return std::nullopt;
+      }
+      profile.hdr = *value;
+    }
+
+    profile.capture_backend = second_monitor_value(vars, "second_monitor_capture_backend"sv, profile.capture_backend);
+    if (profile.capture_backend != "ddx" && profile.capture_backend != "wgc") {
+      BOOST_LOG(warning) << "config: unsupported second-monitor capture backend: " << profile.capture_backend;
+      return std::nullopt;
+    }
+
+    if (const auto it {vars.find("second_monitor_stream_audio")}; it != std::end(vars)) {
+      const auto value {second_monitor_bool(second_monitor_value(vars, "second_monitor_stream_audio"sv))};
+      if (!value) {
+        return std::nullopt;
+      }
+      profile.stream_audio = *value;
+    }
+
+    if (const auto it {vars.find("second_monitor_display_policy")}; it != std::end(vars)) {
+      const auto value {second_monitor_value(vars, "second_monitor_display_policy"sv)};
+      if (value == "vdd_only") {
+        profile.display_policy = video_t::dd_t::config_option_e::vdd_only;
+      } else if (value == "disabled") {
+        profile.display_policy = video_t::dd_t::config_option_e::disabled;
+      } else {
+        BOOST_LOG(warning) << "config: second-monitor display policy must be vdd_only or disabled";
+        return std::nullopt;
+      }
+    } else {
+      profile.display_policy = video_t::dd_t::config_option_e::vdd_only;
+    }
+
+    if (const auto it {vars.find("second_monitor_restore_on_disconnect")}; it != std::end(vars)) {
+      const auto value {second_monitor_bool(second_monitor_value(vars, "second_monitor_restore_on_disconnect"sv))};
+      if (!value) {
+        return std::nullopt;
+      }
+      profile.restore_on_disconnect = *value;
+    }
+
+    return profile;
+  }
+
   /**
    * @brief Default video configuration values used before file and CLI overrides.
    */
@@ -787,6 +961,8 @@ namespace config {
       {},  // mode_remapping
       {}  // wa
     },  // display_device
+
+    {},  // second_monitor
 
     0,  // max_bitrate
     0  // minimum_fps_target (0 = framerate)
@@ -1576,6 +1752,13 @@ namespace config {
   void apply_config(std::unordered_map<std::string, std::string> &&vars) {
     log_config_settings(vars, true);
 
+    if (const auto profile {parse_second_monitor_profile(vars)}; profile) {
+      video.second_monitor = *profile;
+    } else {
+      video.second_monitor = video_t::second_monitor_t {};
+    }
+    erase_second_monitor_keys(vars);
+
     int_f(vars, "qp", video.qp);
     int_between_f(vars, "hevc_mode", video.hevc_mode, {0, 3});
     int_between_f(vars, "av1_mode", video.av1_mode, {0, 3});
@@ -1685,6 +1868,19 @@ namespace config {
       video.dd.wa.hdr_toggle_delay = std::chrono::milliseconds {value};
     }
 
+    if (video.second_monitor.enabled()) {
+      video.output_name = video.second_monitor.device_id;
+      video.capture = video.second_monitor.capture_backend;
+      video.dd.configuration_option = video.second_monitor.display_policy;
+      video.dd.resolution_option = video_t::dd_t::resolution_option_e::manual;
+      video.dd.manual_resolution = video.second_monitor.resolution;
+      video.dd.refresh_rate_option = video_t::dd_t::refresh_rate_option_e::manual;
+      video.dd.manual_refresh_rate = std::to_string(video.second_monitor.fps);
+      video.dd.hdr_option = video.second_monitor.hdr ? video_t::dd_t::hdr_option_e::automatic : video_t::dd_t::hdr_option_e::disabled;
+      video.dd.config_revert_on_disconnect = video.second_monitor.restore_on_disconnect;
+      audio.stream = video.second_monitor.stream_audio;
+    }
+
     int_f(vars, "max_bitrate", video.max_bitrate);
     double_between_f(vars, "minimum_fps_target", video.minimum_fps_target, {0.0, 1000.0});
 
@@ -1705,6 +1901,9 @@ namespace config {
     string_f(vars, "virtual_sink", audio.virtual_sink);
     bool_f(vars, "stream_audio", audio.stream);
     bool_f(vars, "install_steam_audio_drivers", audio.install_steam_drivers);
+    if (video.second_monitor.enabled()) {
+      audio.stream = video.second_monitor.stream_audio;
+    }
 
     string_restricted_f(vars, "origin_web_ui_allowed", nvhttp.origin_web_ui_allowed, {"pc"sv, "lan"sv, "wan"sv});
 
