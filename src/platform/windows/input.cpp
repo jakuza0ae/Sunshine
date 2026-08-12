@@ -127,6 +127,20 @@ namespace platf {
     gamepad_feedback_msg_t last_rgb_led;  ///< Last RGB led.
   };
 
+  struct client_input_raw_t;
+
+  /**
+   * @brief Cancel all active synthetic touch contacts for a client.
+   * @param raw The client-specific input context.
+   */
+  void cancel_all_active_touches(client_input_raw_t *raw);
+
+  /**
+   * @brief Cancel an active synthetic pen contact for a client.
+   * @param raw The client-specific input context.
+   */
+  void cancel_active_pen(client_input_raw_t *raw);
+
   constexpr float EARTH_G = 9.80665f;  ///< Meters per second squared represented by one gravity unit.
 
 /**
@@ -736,12 +750,8 @@ namespace platf {
     }
 
     ~client_input_raw_t() override {
-      if (penRepeatTask) {
-        task_pool.cancel(penRepeatTask);
-      }
-      if (touchRepeatTask) {
-        task_pool.cancel(touchRepeatTask);
-      }
+      cancel_active_pen(this);
+      cancel_all_active_touches(this);
 
       if (pen) {
         global->fnDestroySyntheticPointerDevice(pen);
@@ -835,6 +845,8 @@ namespace platf {
     // If there was none, grab an unused entry and increment the active slot count
     for (UINT32 i = 0; i < ARRAYSIZE(raw->touchInfo); i++) {
       if (raw->touchInfo[i].touchInfo.pointerInfo.pointerFlags == POINTER_FLAG_NONE) {
+        // Clear the old contact before assigning a reused client pointer ID.
+        raw->touchInfo[i] = {};
         raw->touchInfo[i].touchInfo.pointerInfo.pointerId = pointerId;
         raw->activeTouchSlots = i + 1;
         return &raw->touchInfo[i];
@@ -932,6 +944,29 @@ namespace platf {
     }
 
     raw->penRepeatTask = task_pool.pushDelayed(repeat_pen, ISPI_REPEAT_INTERVAL, raw).task_id;
+  }
+
+  /**
+   * @brief Cancel an active synthetic pen contact.
+   * @param raw The client-specific input context.
+   */
+  void cancel_active_pen(client_input_raw_t *raw) {
+    if (raw->penRepeatTask) {
+      task_pool.cancel(raw->penRepeatTask);
+      raw->penRepeatTask = nullptr;
+    }
+
+    if (!raw->pen || raw->penInfo.penInfo.pointerInfo.pointerFlags == POINTER_FLAG_NONE) {
+      return;
+    }
+
+    populate_common_pointer_info(raw->penInfo.penInfo.pointerInfo, {}, LI_TOUCH_EVENT_CANCEL, 0.0f, 0.0f);
+    raw->penInfo.penInfo.penMask = PEN_MASK_NONE;
+    if (!inject_synthetic_pointer_input(raw->global, raw->pen, &raw->penInfo, 1)) {
+      auto err = GetLastError();
+      BOOST_LOG(warning) << "Failed to cancel virtual pen input: "sv << err;
+    }
+    raw->penInfo = {};
   }
 
   /**

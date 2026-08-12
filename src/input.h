@@ -6,6 +6,7 @@
 
 // standard includes
 #include <functional>
+#include <optional>
 
 // local includes
 #include "platform/common.h"
@@ -78,6 +79,37 @@ namespace input {
       return width != 0 && height != 0 && env_width != 0 && env_height != 0;
     }
   };
+
+  /**
+   * @brief Result of mapping a client touch point into a monitor-local viewport.
+   */
+  struct touch_mapping_result {
+    platf::touch_port_t port;  ///< Monitor viewport in logical desktop coordinates.
+    float x;  ///< Monitor-local normalized horizontal coordinate.
+    float y;  ///< Monitor-local normalized vertical coordinate.
+  };
+
+  /**
+   * @brief Map a client-normalized touch point to a monitor-local logical viewport.
+   *
+   * @param port Touch port metadata for the current stream.
+   * @param normalized_x Client-normalized horizontal coordinate.
+   * @param normalized_y Client-normalized vertical coordinate.
+   * @return Monitor-local mapping, or std::nullopt when the port dimensions are invalid.
+   */
+  std::optional<touch_mapping_result> map_client_touch_to_monitor(
+    const touch_port_t &port,
+    float normalized_x,
+    float normalized_y
+  );
+
+  /**
+   * @brief Normalize a touch rotation to the protocol's valid degree range.
+   *
+   * @param rotation Rotation in degrees or LI_ROT_UNKNOWN.
+   * @return Rotation in the range [0, 359], or LI_ROT_UNKNOWN.
+   */
+  uint16_t normalize_touch_rotation(uint16_t rotation);
 
   /**
    * @brief Scale the ellipse axes according to the provided size.

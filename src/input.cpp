@@ -13,6 +13,7 @@ extern "C" {
 #include <chrono>
 #include <cmath>
 #include <list>
+#include <limits>
 #include <thread>
 #include <unordered_map>
 
@@ -1087,28 +1088,68 @@ namespace input {
   }
 
   /**
-   * @brief Normalizes coordinates to monitor-local logical touch dimensions.
-   * @param touch_port The current touch port metadata.
-   * @param coords The in/out coordinate pair to normalize.
-   * @return The monitor-local touch port, or std::nullopt if dimensions are invalid.
+   * @brief Map client-normalized coordinates to a monitor-local logical viewport.
+   * @param port Touch port metadata for the current stream.
+   * @param normalized_x Client-normalized horizontal coordinate.
+   * @param normalized_y Client-normalized vertical coordinate.
+   * @return Monitor-local mapping, or std::nullopt when the port dimensions are invalid.
    */
-  std::optional<platf::touch_port_t> monitor_touch_port(const input::touch_port_t &touch_port, std::pair<float, float> &coords) {
-    const float monitor_logical_w = (touch_port.width * touch_port.scalar_inv) / touch_port.scalar_tpcoords;
-    const float monitor_logical_h = (touch_port.height * touch_port.scalar_inv) / touch_port.scalar_tpcoords;
-    if (monitor_logical_w <= 0.0f || monitor_logical_h <= 0.0f) {
+  std::optional<touch_mapping_result> map_client_touch_to_monitor(
+    const touch_port_t &port,
+    float normalized_x,
+    float normalized_y
+  ) {
+    if (
+      port.width <= 0 || port.height <= 0 || port.env_width <= 0 || port.env_height <= 0 ||
+      !std::isfinite(normalized_x) || !std::isfinite(normalized_y) ||
+      !std::isfinite(port.client_offsetX) || !std::isfinite(port.client_offsetY) ||
+      !std::isfinite(port.scalar_inv) || !std::isfinite(port.scalar_tpcoords) ||
+      port.client_offsetX < 0.0f || port.client_offsetY < 0.0f ||
+      port.scalar_inv <= 0.0f || port.scalar_tpcoords <= 0.0f
+    ) {
+      return std::nullopt;
+    }
+
+    const float content_width = port.width - 2.0f * port.client_offsetX;
+    const float content_height = port.height - 2.0f * port.client_offsetY;
+    const float monitor_logical_w = (content_width * port.scalar_inv) / port.scalar_tpcoords;
+    const float monitor_logical_h = (content_height * port.scalar_inv) / port.scalar_tpcoords;
+    if (
+      content_width <= 0.0f || content_height <= 0.0f ||
+      !std::isfinite(monitor_logical_w) || !std::isfinite(monitor_logical_h) ||
+      monitor_logical_w < 1.0f || monitor_logical_h < 1.0f ||
+      monitor_logical_w > std::numeric_limits<int>::max() || monitor_logical_h > std::numeric_limits<int>::max()
+    ) {
       BOOST_LOG(warning) << "Ignoring touch/pen input due to invalid logical touch dimensions"sv;
       return std::nullopt;
     }
 
-    coords.first = (coords.first - touch_port.offset_x) / monitor_logical_w;
-    coords.second = (coords.second - touch_port.offset_y) / monitor_logical_h;
-
-    return platf::touch_port_t {
-      touch_port.offset_x,
-      touch_port.offset_y,
-      static_cast<int>(monitor_logical_w),
-      static_cast<int>(monitor_logical_h)
+    auto map_axis = [](float normalized, float port_size, float client_offset, float scalar_inv, float scalar_tpcoords, float monitor_logical_size) {
+      auto client_coordinate = std::clamp(normalized, 0.0f, 1.0f) * port_size;
+      client_coordinate = std::clamp(client_coordinate, client_offset, port_size - client_offset);
+      const auto monitor_coordinate = (client_coordinate - client_offset) * scalar_inv / scalar_tpcoords;
+      return std::clamp(monitor_coordinate / monitor_logical_size, 0.0f, 1.0f);
     };
+
+    return touch_mapping_result {
+      {
+        port.offset_x,
+        port.offset_y,
+        static_cast<int>(monitor_logical_w),
+        static_cast<int>(monitor_logical_h)
+      },
+      map_axis(normalized_x, port.width, port.client_offsetX, port.scalar_inv, port.scalar_tpcoords, monitor_logical_w),
+      map_axis(normalized_y, port.height, port.client_offsetY, port.scalar_inv, port.scalar_tpcoords, monitor_logical_h)
+    };
+  }
+
+  /**
+   * @brief Normalize a touch rotation to the protocol's valid degree range.
+   * @param rotation Rotation in degrees or LI_ROT_UNKNOWN.
+   * @return Rotation in the range [0, 359], or LI_ROT_UNKNOWN.
+   */
+  uint16_t normalize_touch_rotation(uint16_t rotation) {
+    return rotation == LI_ROT_UNKNOWN ? rotation : rotation % 360;
   }
 
   /**
@@ -1117,49 +1158,43 @@ namespace input {
    * @param packet The touch packet.
    */
   void passthrough(std::shared_ptr<input_t> &input, PSS_TOUCH_PACKET packet) {
-    if (!config::input.mouse) {
-      return;
-    }
-
-    // Convert the client normalized coordinates to touchport coordinates
-    auto coords = client_to_touchport(input, {from_clamped_netfloat(packet->x, 0.0f, 1.0f) * 65535.f, from_clamped_netfloat(packet->y, 0.0f, 1.0f) * 65535.f}, {65535.f, 65535.f});
-    if (!coords) {
+    if (!config::input.native_pen_touch) {
       return;
     }
 
     auto &touch_port = input->touch_port;
-
-    auto abs_port = monitor_touch_port(touch_port, *coords);
-    if (!abs_port) {
+    auto mapping = map_client_touch_to_monitor(
+      touch_port,
+      from_clamped_netfloat(packet->x, 0.0f, 1.0f),
+      from_clamped_netfloat(packet->y, 0.0f, 1.0f)
+    );
+    if (!mapping) {
       return;
     }
 
     // Normalize rotation value to 0-359 degree range
-    auto rotation = util::endian::little(packet->rotation);
-    if (rotation != LI_ROT_UNKNOWN) {
-      rotation %= 360;
-    }
+    auto rotation = normalize_touch_rotation(util::endian::little(packet->rotation));
 
     // Normalize the contact area based on the touchport
     auto contact_area = scale_client_contact_area(
       {from_clamped_netfloat(packet->contactAreaMajor, 0.0f, 1.0f) * 65535.f,
        from_clamped_netfloat(packet->contactAreaMinor, 0.0f, 1.0f) * 65535.f},
       rotation,
-      {abs_port->width / 65535.f, abs_port->height / 65535.f}
+      {mapping->port.width / 65535.f, mapping->port.height / 65535.f}
     );
 
     platf::touch_input_t touch {
       packet->eventType,
       rotation,
       util::endian::little(packet->pointerId),
-      coords->first,
-      coords->second,
+      mapping->x,
+      mapping->y,
       from_clamped_netfloat(packet->pressureOrDistance, 0.0f, 1.0f),
       contact_area.first,
       contact_area.second,
     };
 
-    platf::touch_update(input->client_context.get(), *abs_port, touch);
+    platf::touch_update(input->client_context.get(), mapping->port, touch);
   }
 
   /**
@@ -1168,35 +1203,29 @@ namespace input {
    * @param packet The pen packet.
    */
   void passthrough(std::shared_ptr<input_t> &input, PSS_PEN_PACKET packet) {
-    if (!config::input.mouse) {
-      return;
-    }
-
-    // Convert the client normalized coordinates to touchport coordinates
-    auto coords = client_to_touchport(input, {from_clamped_netfloat(packet->x, 0.0f, 1.0f) * 65535.f, from_clamped_netfloat(packet->y, 0.0f, 1.0f) * 65535.f}, {65535.f, 65535.f});
-    if (!coords) {
+    if (!config::input.native_pen_touch) {
       return;
     }
 
     auto &touch_port = input->touch_port;
-
-    auto abs_port = monitor_touch_port(touch_port, *coords);
-    if (!abs_port) {
+    auto mapping = map_client_touch_to_monitor(
+      touch_port,
+      from_clamped_netfloat(packet->x, 0.0f, 1.0f),
+      from_clamped_netfloat(packet->y, 0.0f, 1.0f)
+    );
+    if (!mapping) {
       return;
     }
 
     // Normalize rotation value to 0-359 degree range
-    auto rotation = util::endian::little(packet->rotation);
-    if (rotation != LI_ROT_UNKNOWN) {
-      rotation %= 360;
-    }
+    auto rotation = normalize_touch_rotation(util::endian::little(packet->rotation));
 
     // Normalize the contact area based on the touchport
     auto contact_area = scale_client_contact_area(
       {from_clamped_netfloat(packet->contactAreaMajor, 0.0f, 1.0f) * 65535.f,
        from_clamped_netfloat(packet->contactAreaMinor, 0.0f, 1.0f) * 65535.f},
       rotation,
-      {abs_port->width / 65535.f, abs_port->height / 65535.f}
+      {mapping->port.width / 65535.f, mapping->port.height / 65535.f}
     );
 
     platf::pen_input_t pen {
@@ -1205,14 +1234,14 @@ namespace input {
       packet->penButtons,
       packet->tilt,
       rotation,
-      coords->first,
-      coords->second,
+      mapping->x,
+      mapping->y,
       from_clamped_netfloat(packet->pressureOrDistance, 0.0f, 1.0f),
       contact_area.first,
       contact_area.second,
     };
 
-    platf::pen_update(input->client_context.get(), *abs_port, pen);
+    platf::pen_update(input->client_context.get(), mapping->port, pen);
   }
 
   /**
