@@ -781,19 +781,7 @@ namespace display_device {
   }  // namespace
 
   std::optional<bool> classify_virtual_device(const EnumeratedDevice &device) {
-    std::string name {device.m_friendly_name};
-    std::ranges::transform(name, std::begin(name), [](const unsigned char character) {
-      return static_cast<char>(std::tolower(character));
-    });
-    if (name.contains("virtual") || name.contains("vdd")) {
-      return device.m_edid ? std::nullopt : std::optional<bool> {true};
-    }
-
-    if (device.m_edid) {
-      return false;
-    }
-
-    return std::nullopt;
+    return device.m_virtual_device;
   }
 
   std::string_view second_monitor_state_name(const second_monitor_state_e state) {
@@ -1092,7 +1080,7 @@ namespace display_device {
     const auto device_it {std::find_if(std::begin(devices), std::end(devices), [&device_id = video_config.output_name](const auto &device) {
       return device.m_device_id == device_id;
     })};
-    if (device_it == std::end(devices) || device_it->m_display_name.empty() || classify_virtual_device(*device_it) != std::optional<bool> {true}) {
+    if (device_it == std::end(devices) || device_it->m_display_name.empty() || (video_config.second_monitor.enabled() && classify_virtual_device(*device_it) != std::optional<bool> {true})) {
       selection.unavailable = true;
       return selection;
     }

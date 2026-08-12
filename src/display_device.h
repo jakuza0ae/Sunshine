@@ -50,9 +50,9 @@ namespace display_device {
   [[nodiscard]] std::string_view second_monitor_state_name(second_monitor_state_e state);
 
   /**
-   * @brief Classify a display using available identity metadata.
+   * @brief Return the libdisplaydevice-provided virtual-device classification.
    * @param device Enumerated display device.
-   * @return True for a virtual identity, false for an EDID-backed physical identity, or empty when unknown.
+   * @return True for an indirect virtual output, false for a known physical output, or empty when unknown.
    */
   [[nodiscard]] std::optional<bool> classify_virtual_device(const EnumeratedDevice &device);
 
