@@ -485,16 +485,16 @@ LizardByte has the full documentation hosted on [Read the Docs](https://docs.liz
 Build on Windows with an MSYS2 UCRT64 shell. The required toolchain is CMake 3.25 or newer, Ninja, a C++23-capable UCRT64 compiler, and Qt6. The following command installs the core packages used by the build:
 
 ```text
-C:\msys64\msys2_shell.cmd -defterm -here -no-start -ucrt64 -c "pacman -S --needed git mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja mingw-w64-ucrt-x86_64-toolchain mingw-w64-ucrt-x86_64-cppwinrt mingw-w64-ucrt-x86_64-curl-winssl mingw-w64-ucrt-x86_64-miniupnpc mingw-w64-ucrt-x86_64-onevpl mingw-w64-ucrt-x86_64-openssl mingw-w64-ucrt-x86_64-opus mingw-w64-ucrt-x86_64-qt6-static"
+C:\msys64\msys2_shell.cmd -defterm -here -no-start -ucrt64 -c "pacman -S --needed git mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja mingw-w64-ucrt-x86_64-toolchain mingw-w64-ucrt-x86_64-cppwinrt mingw-w64-ucrt-x86_64-curl-winssl mingw-w64-ucrt-x86_64-doxygen mingw-w64-ucrt-x86_64-graphviz mingw-w64-ucrt-x86_64-MinHook mingw-w64-ucrt-x86_64-miniupnpc mingw-w64-ucrt-x86_64-nodejs mingw-w64-ucrt-x86_64-nsis mingw-w64-ucrt-x86_64-onevpl mingw-w64-ucrt-x86_64-openssl mingw-w64-ucrt-x86_64-opus mingw-w64-ucrt-x86_64-qt6-static"
 ```
 
 Clone the complete source tree and initialize its recursive dependencies:
 
 ```text
-C:\msys64\msys2_shell.cmd -defterm -here -no-start -ucrt64 -c "git clone --recurse-submodules https://github.com/LizardByte/Sunshine.git && cd Sunshine && git submodule update --init --recursive"
+C:\msys64\msys2_shell.cmd -defterm -here -no-start -ucrt64 -c "git clone --no-checkout https://github.com/LizardByte/Sunshine.git Sunshine && cd Sunshine && git checkout --detach 20a0410130d0be421ed20c694322dde95b88ba32 && git submodule update --init --recursive"
 ```
 
-At this revision, if the recursive update reports `Unable to find current revision in submodule path 'third-party/build-deps/third-party/FFmpeg/AMF'`, fetch the pinned AMF object and resume the update:
+The checkout is pinned to Sunshine commit `20a0410130d0be421ed20c694322dde95b88ba32`. At that commit, if the recursive update reports `Unable to find current revision in submodule path 'third-party/build-deps/third-party/FFmpeg/AMF'`, fetch the pinned AMF object and resume the update:
 
 ```text
 C:\msys64\msys2_shell.cmd -defterm -here -no-start -ucrt64 -c "cd Sunshine && git -C third-party/build-deps/third-party/FFmpeg/AMF fetch --depth=1 origin eadd00804d5f7e5cd8c85d540073198312870776 && git -C third-party/build-deps/third-party/FFmpeg/AMF checkout --detach eadd00804d5f7e5cd8c85d540073198312870776 && git submodule update --init --recursive"
