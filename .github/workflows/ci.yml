@@ -7,6 +7,7 @@ on:
   push:
     branches:
       - master
+      - feature/second-monitor
   workflow_dispatch:
 
 concurrency:
