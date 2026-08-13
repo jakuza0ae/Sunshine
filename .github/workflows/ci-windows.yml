@@ -71,7 +71,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          submodules: recursive
+          submodules: false
 
       - name: Setup Dependencies Windows
         # if a dependency needs to be pinned, see https://github.com/LizardByte/build-deps/pull/186
@@ -81,6 +81,22 @@ jobs:
           update: true
           install: >-
             wget
+
+      - name: Checkout submodules with pinned AMF recovery
+        shell: msys2 {0}
+        run: |
+          set +e
+          git submodule update --init --recursive
+          submodule_status=$?
+          set -e
+
+          if [[ "${submodule_status}" -ne 0 ]]; then
+            amf_path="third-party/build-deps/third-party/FFmpeg/AMF"
+            amf_commit="eadd00804d5f7e5cd8c85d540073198312870776"
+            git -C "${amf_path}" fetch --depth=1 origin "${amf_commit}"
+            git -C "${amf_path}" checkout --detach "${amf_commit}"
+            git submodule update --init --recursive
+          fi
 
       - name: Update Windows dependencies
         env:
