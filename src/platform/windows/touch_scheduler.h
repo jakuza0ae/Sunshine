@@ -22,7 +22,7 @@ namespace platf {
   /**
    * @brief Keepalive interval required by Windows synthetic pointer input.
    */
-  inline constexpr auto touch_keepalive_interval = std::chrono::milliseconds {50};
+  inline constexpr std::chrono::milliseconds touch_keepalive_interval {50};
 
   /**
    * @brief Tracks client pointer IDs independently of Windows pointer storage.

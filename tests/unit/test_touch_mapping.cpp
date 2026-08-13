@@ -134,6 +134,8 @@ TEST(TouchSlots, ReusesReleasedPointerIdSlot) {
   const auto first = slots.acquire(42);
   ASSERT_TRUE(first.has_value());
   slots.release(*first);
+  EXPECT_FALSE(slots.is_active(*first));
+  EXPECT_EQ(slots.pointer_id(*first), 0U);
 
   const auto reused = slots.acquire(42);
   ASSERT_TRUE(reused.has_value());
@@ -150,7 +152,22 @@ TEST(TouchSlots, ClearRemovesEveryActiveSlot) {
 
   EXPECT_FALSE(slots.is_active(0));
   EXPECT_FALSE(slots.is_active(1));
+  EXPECT_EQ(slots.pointer_id(0), 0U);
+  EXPECT_EQ(slots.pointer_id(1), 0U);
   EXPECT_EQ(slots.acquire(3), std::optional<std::size_t> {0});
+}
+
+TEST(TouchSlots, CompactionSwapPreservesPointerIdsBeforeReuse) {
+  platf::touch_slot_tracker_t slots;
+  ASSERT_EQ(slots.acquire(11), std::optional<std::size_t> {0});
+  ASSERT_EQ(slots.acquire(22), std::optional<std::size_t> {1});
+
+  slots.swap_slots(0, 1);
+  EXPECT_EQ(slots.pointer_id(0), 22U);
+  EXPECT_EQ(slots.pointer_id(1), 11U);
+
+  slots.release(0);
+  EXPECT_EQ(slots.acquire(33), std::optional<std::size_t> {0});
 }
 
 TEST(TouchRepeatScheduler, CancellationInvalidatesPoppedCallbackBeforeItCanReschedule) {
@@ -160,6 +177,8 @@ TEST(TouchRepeatScheduler, CancellationInvalidatesPoppedCallbackBeforeItCanResch
   });
   ASSERT_TRUE(generation.has_value());
   ASSERT_TRUE(scheduler.begin_callback(*generation));
+  int injections = 1;
+  int reschedules = scheduler.callback_may_reschedule(*generation) ? 1 : 0;
 
   std::atomic_bool cancel_finished = false;
   std::thread cancellation([&]() {
@@ -178,7 +197,15 @@ TEST(TouchRepeatScheduler, CancellationInvalidatesPoppedCallbackBeforeItCanResch
   cancellation.join();
 
   EXPECT_TRUE(cancel_finished.load());
-  EXPECT_FALSE(scheduler.begin_callback(*generation));
+  if (scheduler.begin_callback(*generation)) {
+    ++injections;
+    if (scheduler.callback_may_reschedule(*generation)) {
+      ++reschedules;
+    }
+    scheduler.finish_callback(*generation);
+  }
+  EXPECT_EQ(injections, 1);
+  EXPECT_EQ(reschedules, 1);
   EXPECT_FALSE(scheduler.queue(*generation, [](auto) {
     return nullptr;
   }).has_value());
@@ -188,7 +215,7 @@ TEST(TouchRepeatScheduler, CancellationInvalidatesPoppedCallbackBeforeItCanResch
 }
 
 TEST(TouchRepeatScheduler, PreservesFiftyMillisecondKeepaliveTransitions) {
-  EXPECT_EQ(platf::touch_keepalive_interval, 50ms);
+  EXPECT_EQ(platf::touch_keepalive_interval, std::chrono::milliseconds {50});
 
   platf::touch_repeat_scheduler_t scheduler;
   auto generation = scheduler.queue([](auto) {
