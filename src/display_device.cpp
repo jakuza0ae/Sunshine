@@ -878,9 +878,18 @@ namespace display_device {
       return false;
     }
 
+    m_status.last_error = "launch_failed";
+
+    // A VDD that was unavailable before configuration is retryable, not a
+    // restore operation. Only restore a display state we actually changed.
+    if (!m_display_configured) {
+      m_state = second_monitor_state_e::waiting_for_vdd;
+      m_status.state = std::string {second_monitor_state_name(m_state)};
+      return false;
+    }
+
     m_restore_scheduled = true;
     m_restore_request_pending = true;
-    m_status.last_error = "launch_failed";
     m_state = second_monitor_state_e::display_restore_pending;
     m_status.state = std::string {second_monitor_state_name(m_state)};
     return true;
