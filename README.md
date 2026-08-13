@@ -47,7 +47,9 @@ second_monitor_display_policy=vdd_only
 second_monitor_restore_on_disconnect=true
 ```
 
-The authenticated `GET /api/second-monitor/status` endpoint reports lifecycle state, host display identity, mapped output, capture backend, encoder, codec, stream metrics, and restore errors without returning credentials or command content. Use `docs/superpowers/validation/second-monitor-test-matrix.md` in the Moonlight checkout for the complete VDD, touch, network, restore, and no-fallback matrix.
+The authenticated `GET /api/second-monitor/status` endpoint follows the shared record in `docs/superpowers/validation/second-monitor-test-matrix.md`: state, host display identity, mapped output, capture backend, encoder, codec, resolution, FPS, bitrate, RTT, dropped frames, reconnect count, and last error. Host-side `rtt_ms`, `dropped_frames`, and `reconnect_count` are currently JSON `null` because this status path has no host telemetry source; they must not be read as zero. The endpoint sanitizes untrusted display metadata and does not return credentials, pairing keys, or command content.
+
+Use the validation matrix in the Moonlight checkout for the complete VDD, touch, network, restore, and no-fallback matrix. Moonlight's local RTT, dropped-frame, and reconnect values are client metrics and are not host metrics.
 
 Host-side C++ tests and live Windows VDD/hotplug checks require the documented MSYS2 toolchain and a target Windows session. If those prerequisites are unavailable, record the check as `BLOCKED/NOT RUN`; this checkout does not claim those checks pass.
 

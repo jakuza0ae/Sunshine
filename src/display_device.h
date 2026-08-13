@@ -88,10 +88,10 @@ namespace display_device {
     unsigned int active_width {};  ///< Active profile width in pixels.
     unsigned int active_height {};  ///< Active profile height in pixels.
     unsigned int active_fps {};  ///< Active profile frame rate.
-    unsigned int bitrate_kbps {};  ///< Negotiated video bitrate in kilobits per second.
+    std::optional<unsigned int> bitrate_kbps {};  ///< Negotiated video bitrate in kilobits per second when available.
     std::optional<unsigned int> rtt_ms {};  ///< Round-trip time in milliseconds when available.
     std::optional<unsigned int> dropped_frames {};  ///< Dropped frame count when available.
-    unsigned int reconnect_count {};  ///< Number of reconnects reported by the diagnostic source.
+    std::optional<unsigned int> reconnect_count {};  ///< Number of reconnects when reported by the diagnostic source.
     std::string last_error {};  ///< Last bounded lifecycle error name.
     std::string last_reinitialization_reason {};  ///< Last bounded reason for capture reinitialization.
     std::vector<second_monitor_device_status_t> devices {};  ///< Enumerated display choices for the selector.

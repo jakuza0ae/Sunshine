@@ -431,6 +431,61 @@ TEST(SecondMonitorDiagnostics, SerializesTheDiagnosticRecordWithoutSecretsOrComm
   EXPECT_EQ(serialized.find("password"), std::string::npos);
 }
 
+TEST(SecondMonitorDiagnostics, UsesNullForUnavailableMetricsAndSanitizesUntrustedMetadata) {
+  display_device::second_monitor_status_t status {
+    .state = "waiting_for_vdd",
+    .selected_device_id = "{stable-vdd-guid}",
+    .host_display_id = "{stable-vdd-guid}",
+    .mapped_output = "\\\\.\\DISPLAY2\r\nwhoami",
+    .friendly_name = "whoami && type secret.txt",
+    .capture_backend = "",
+    .encoder = "",
+    .codec = "",
+    .active_width = 0,
+    .active_height = 0,
+    .active_fps = 0,
+    .last_error = "powershell -Command whoami",
+    .last_reinitialization_reason = "pairing-key=password"
+  };
+  status.devices.push_back({
+    .device_id = "{device-guid}\nwhoami",
+    .display_name = "Monitor\r\nwhoami",
+    .friendly_name = std::string(300, 'a')
+  });
+  status.devices.push_back({
+    .device_id = "{safe-device-guid}",
+    .display_name = "Display",
+    .friendly_name = "physical && type secret.txt"
+  });
+
+  const auto json {confighttp::serialize_second_monitor_status(status)};
+  const auto serialized {json.dump()};
+  const auto &device_json {json.at("devices").at(0)};
+  const auto &dangerous_device_json {json.at("devices").at(1)};
+
+  EXPECT_EQ(json.at("state").get<std::string>(), "waiting_for_vdd");
+  EXPECT_EQ(json.at("host_display_id").get<std::string>(), "{stable-vdd-guid}");
+  EXPECT_TRUE(json.at("capture_backend").is_null());
+  EXPECT_TRUE(json.at("encoder").is_null());
+  EXPECT_TRUE(json.at("codec").is_null());
+  EXPECT_TRUE(json.at("resolution").is_null());
+  EXPECT_TRUE(json.at("fps").is_null());
+  EXPECT_TRUE(json.at("bitrate_kbps").is_null());
+  EXPECT_TRUE(json.at("rtt_ms").is_null());
+  EXPECT_TRUE(json.at("dropped_frames").is_null());
+  EXPECT_TRUE(json.at("reconnect_count").is_null());
+  EXPECT_EQ(json.at("last_error").get<std::string>(), "redacted");
+  EXPECT_EQ(json.at("last_reinitialization_reason").get<std::string>(), "redacted");
+  EXPECT_EQ(json.at("mapped_output").get<std::string>().find_first_of("\r\n"), std::string::npos);
+  EXPECT_EQ(device_json.at("device_id").get<std::string>().find("whoami"), std::string::npos);
+  EXPECT_EQ(device_json.at("display_name").get<std::string>().find("whoami"), std::string::npos);
+  EXPECT_LE(device_json.at("friendly_name").get<std::string>().size(), 128U);
+  EXPECT_EQ(dangerous_device_json.at("friendly_name").get<std::string>(), "redacted");
+  EXPECT_EQ(serialized.find("powershell"), std::string::npos);
+  EXPECT_EQ(serialized.find("pairing-key"), std::string::npos);
+  EXPECT_EQ(serialized.find("password"), std::string::npos);
+}
+
 TEST(DisplayDeviceClassification, UsesVirtualIdentitySignalsAndUnknownWhenMetadataIsInsufficient) {
   const display_device::EnumeratedDevice virtual_device {
     .m_device_id = "{vdd-guid}",

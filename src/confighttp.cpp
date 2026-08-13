@@ -9,6 +9,7 @@
 // standard includes
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -74,10 +75,59 @@ namespace confighttp {
    */
   using https_handler_t = std::function<void(resp_https_t, req_https_t)>;
 
+  constexpr std::size_t SECOND_MONITOR_DIAGNOSTIC_TEXT_LIMIT {128};
+
   /**
-   * @brief Replace diagnostic text that did not come from a bounded lifecycle vocabulary.
-   * @param value Candidate diagnostic text.
-   * @return The original known-safe value or a redaction marker.
+   * @brief Sanitize untrusted display metadata before it enters diagnostic JSON.
+   * @param value Candidate display or device text.
+   * @return Bounded safe text, or a redaction marker for dangerous content.
+   */
+  std::string sanitize_second_monitor_text(const std::string_view value) {
+    if (value.empty()) {
+      return {};
+    }
+
+    std::string sanitized;
+    sanitized.reserve(std::min(value.size(), SECOND_MONITOR_DIAGNOSTIC_TEXT_LIMIT));
+    for (const unsigned char character : value) {
+      if (character < 0x20 || character == 0x7f) {
+        sanitized.push_back('?');
+      } else {
+        sanitized.push_back(static_cast<char>(character));
+      }
+      if (sanitized.size() == SECOND_MONITOR_DIAGNOSTIC_TEXT_LIMIT) {
+        break;
+      }
+    }
+
+    std::string lowercase {sanitized};
+    std::transform(std::begin(lowercase), std::end(lowercase), std::begin(lowercase), [](const unsigned char character) {
+      return static_cast<char>(std::tolower(character));
+    });
+    constexpr std::array<std::string_view, 8> dangerous_terms {
+      "password",
+      "pairing",
+      "secret",
+      "private key",
+      "command",
+      "whoami",
+      "powershell",
+      "cmd.exe"
+    };
+    constexpr std::string_view dangerous_symbols {";|&$`"};
+    if (std::any_of(std::begin(dangerous_terms), std::end(dangerous_terms), [&lowercase](const auto term) {
+          return lowercase.find(term) != std::string::npos;
+        }) || lowercase.find_first_of(dangerous_symbols) != std::string::npos) {
+      return "redacted";
+    }
+
+    return sanitized;
+  }
+
+  /**
+   * @brief Replace diagnostic lifecycle text that is outside the safe vocabulary.
+   * @param value Candidate lifecycle or error text.
+   * @return The original known-safe value, a bounded redaction marker, or empty text.
    */
   std::string safe_second_monitor_diagnostic_text(const std::string_view value) {
     constexpr std::array<std::string_view, 7> safe_values {
@@ -90,9 +140,29 @@ namespace confighttp {
       "capture backend requested reinitialization"
     };
     if (std::find(std::begin(safe_values), std::end(safe_values), value) != std::end(safe_values)) {
-      return std::string {value};
+      return sanitize_second_monitor_text(value);
     }
-    return "redacted";
+    return value.empty() ? std::string {} : "redacted";
+  }
+
+  /**
+   * @brief Serialize optional sanitized text as a JSON string or null.
+   * @param value Candidate untrusted text.
+   * @return Sanitized JSON string, null when unavailable, or redacted text.
+   */
+  nlohmann::json diagnostic_text_json(const std::string_view value) {
+    const auto sanitized {sanitize_second_monitor_text(value)};
+    return sanitized.empty() ? nlohmann::json {nullptr} : nlohmann::json {sanitized};
+  }
+
+  /**
+   * @brief Serialize an optional bounded lifecycle value as a JSON string or null.
+   * @param value Candidate lifecycle/error text.
+   * @return Safe lifecycle JSON value.
+   */
+  nlohmann::json lifecycle_text_json(const std::string_view value) {
+    const auto sanitized {safe_second_monitor_diagnostic_text(value)};
+    return sanitized.empty() ? nlohmann::json {nullptr} : nlohmann::json {sanitized};
   }
 
   /**
@@ -1060,36 +1130,45 @@ namespace confighttp {
     nlohmann::json devices = nlohmann::json::array();
     for (const auto &device : status.devices) {
       devices.push_back({
-        {"device_id", device.device_id},
-        {"display_name", device.display_name},
-        {"friendly_name", device.friendly_name},
+        {"device_id", diagnostic_text_json(device.device_id)},
+        {"display_name", diagnostic_text_json(device.display_name)},
+        {"friendly_name", diagnostic_text_json(device.friendly_name)},
         {"active", device.active},
         {"virtual_device", virtual_device_json(device.virtual_device)},
         {"current_resolution", std::format("{}x{}", device.current_width, device.current_height)}
       });
     }
 
+    const auto host_display_id {status.host_display_id.empty() ? status.selected_device_id : status.host_display_id};
+    std::optional<unsigned int> active_fps;
+    if (status.active_fps != 0) {
+      active_fps = status.active_fps;
+    }
+    const auto active_resolution {status.active_width == 0 || status.active_height == 0
+                                    ? nlohmann::json {nullptr}
+                                    : nlohmann::json {std::format("{}x{}", status.active_width, status.active_height)}};
+
     return {
       {"state", status.state},
-      {"selected_device_id", status.selected_device_id},
-      {"host_display_id", status.host_display_id.empty() ? status.selected_device_id : status.host_display_id},
-      {"mapped_output", status.mapped_output},
-      {"friendly_name", status.friendly_name},
+      {"selected_device_id", diagnostic_text_json(status.selected_device_id)},
+      {"host_display_id", diagnostic_text_json(host_display_id)},
+      {"mapped_output", diagnostic_text_json(status.mapped_output)},
+      {"friendly_name", diagnostic_text_json(status.friendly_name)},
       {"active", status.active},
       {"virtual_device", virtual_device_json(status.virtual_device)},
       {"current_resolution", std::format("{}x{}", status.current_width, status.current_height)},
       {"devices", std::move(devices)},
-      {"capture_backend", status.capture_backend},
-      {"encoder", status.encoder},
-      {"codec", status.codec},
-      {"resolution", std::format("{}x{}", status.active_width, status.active_height)},
-      {"fps", status.active_fps},
-      {"bitrate_kbps", status.bitrate_kbps},
+      {"capture_backend", diagnostic_text_json(status.capture_backend)},
+      {"encoder", diagnostic_text_json(status.encoder)},
+      {"codec", diagnostic_text_json(status.codec)},
+      {"resolution", active_resolution},
+      {"fps", optional_uint_json(active_fps)},
+      {"bitrate_kbps", optional_uint_json(status.bitrate_kbps)},
       {"rtt_ms", optional_uint_json(status.rtt_ms)},
       {"dropped_frames", optional_uint_json(status.dropped_frames)},
-      {"reconnect_count", status.reconnect_count},
-      {"last_error", safe_second_monitor_diagnostic_text(status.last_error)},
-      {"last_reinitialization_reason", safe_second_monitor_diagnostic_text(status.last_reinitialization_reason)}
+      {"reconnect_count", optional_uint_json(status.reconnect_count)},
+      {"last_error", lifecycle_text_json(status.last_error)},
+      {"last_reinitialization_reason", lifecycle_text_json(status.last_reinitialization_reason)}
     };
   }
 
