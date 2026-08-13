@@ -19,9 +19,8 @@
 // standard includes
 #include <cmath>
 #include <cstddef>
-#include <condition_variable>
 #include <memory>
-#include <mutex>
+#include <optional>
 #include <thread>
 #include <vector>
 
@@ -35,6 +34,7 @@
 #include "src/globals.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
+#include "touch_scheduler.h"
 
 namespace platf {
   using namespace std::literals;
@@ -136,32 +136,25 @@ namespace platf {
   /**
    * @brief Synchronizes delayed synthetic pointer callbacks with client teardown.
    */
-  struct repeat_state_t {
-    std::mutex mutex;  ///< Protects callback and task state.
-    std::condition_variable condition;  ///< Signals when callbacks have exited.
-    bool shutting_down {};  ///< Prevents callbacks from starting or rescheduling.
-    bool cancelling {};  ///< Prevents callbacks from injecting during cancellation.
-    std::size_t active_callbacks {};  ///< Number of callbacks currently executing.
-    thread_pool_util::ThreadPool::task_id_t task {};  ///< Queued delayed callback.
+  struct repeat_state_t: touch_repeat_scheduler_t {
     client_input_raw_t *owner {};  ///< Owning client context while it is alive.
   };
 
   using repeat_state_ptr = std::shared_ptr<repeat_state_t>;
 
-  // Active pointer interactions need a refresh at least every 50 ms.
-  constexpr auto ISPI_REPEAT_INTERVAL = 50ms;  ///< Protocol or platform constant for ispi repeat interval.
-
   /**
    * @brief Repeat a touch state after the keepalive interval.
    * @param state Shared lifetime state for the client-specific input context.
+   * @param generation Callback generation.
    */
-  void repeat_touch(repeat_state_ptr state);
+  void repeat_touch(repeat_state_ptr state, touch_repeat_scheduler_t::generation_t generation);
 
   /**
    * @brief Repeat a pen state after the keepalive interval.
    * @param state Shared lifetime state for the client-specific input context.
+   * @param generation Callback generation.
    */
-  void repeat_pen(repeat_state_ptr state);
+  void repeat_pen(repeat_state_ptr state, touch_repeat_scheduler_t::generation_t generation);
 
   /**
    * @brief Cancel all active synthetic touch contacts for a client.
@@ -814,38 +807,38 @@ namespace platf {
 
     HSYNTHETICPOINTERDEVICE touch {};  ///< Windows synthetic pointer device used for touch events.
     POINTER_TYPE_INFO touchInfo[10] {};  ///< Touch info.
+    touch_slot_tracker_t touchSlots;  ///< Client pointer IDs aligned with touchInfo slots.
     UINT32 activeTouchSlots {};  ///< Active touch slots.
     repeat_state_ptr touchRepeat;  ///< Touch repeat synchronization state.
   };
 
-  using repeat_callback_t = void (*)(repeat_state_ptr);
+  using repeat_callback_t = void (*)(repeat_state_ptr, touch_repeat_scheduler_t::generation_t);
 
   /**
    * @brief Queue the next guarded repeat callback.
    * @param state Shared repeat state.
    * @param callback Callback to execute after the keepalive interval.
+   * @param expected_generation Optional generation that must still be current.
    */
-  void schedule_repeat_locked(const repeat_state_ptr &state, repeat_callback_t callback) {
-    if (state->shutting_down || state->cancelling) {
-      return;
+  void schedule_repeat(
+    const repeat_state_ptr &state,
+    repeat_callback_t callback,
+    std::optional<touch_repeat_scheduler_t::generation_t> expected_generation = std::nullopt
+  ) {
+    auto enqueue = [state, callback](auto generation) {
+      return task_pool.pushDelayed(
+        [state, callback, generation]() {
+          callback(state, generation);
+        },
+        touch_keepalive_interval
+      ).task_id;
+    };
+
+    if (expected_generation) {
+      state->queue(*expected_generation, std::move(enqueue));
+    } else {
+      state->queue(std::move(enqueue));
     }
-
-    state->task = task_pool.pushDelayed(
-      [state, callback]() {
-        callback(state);
-      },
-      ISPI_REPEAT_INTERVAL
-    ).task_id;
-  }
-
-  /**
-   * @brief Queue the next guarded repeat callback.
-   * @param state Shared repeat state.
-   * @param callback Callback to execute after the keepalive interval.
-   */
-  void schedule_repeat(const repeat_state_ptr &state, repeat_callback_t callback) {
-    std::lock_guard lock(state->mutex);
-    schedule_repeat_locked(state, callback);
   }
 
   /**
@@ -854,24 +847,12 @@ namespace platf {
    * @param shutting_down Whether this is permanent client teardown.
    */
   void cancel_repeat(const repeat_state_ptr &state, bool shutting_down) {
-    thread_pool_util::ThreadPool::task_id_t task {};
-    {
-      std::lock_guard lock(state->mutex);
-      state->cancelling = true;
-      state->shutting_down = state->shutting_down || shutting_down;
-      task = state->task;
-      state->task = nullptr;
-    }
+    const auto task = state->begin_cancel(shutting_down);
 
     if (task) {
       task_pool.cancel(task);
     }
-
-    std::unique_lock lock(state->mutex);
-    state->condition.wait(lock, [&state]() {
-      return state->active_callbacks == 0;
-    });
-    state->cancelling = false;
+    state->finish_cancel();
   }
 
   /**
@@ -893,10 +874,12 @@ namespace platf {
     UINT32 i;
     for (i = 0; i < ARRAYSIZE(raw->touchInfo); i++) {
       if (raw->touchInfo[i].touchInfo.pointerInfo.pointerFlags == POINTER_FLAG_NONE) {
+        raw->touchSlots.release(i);
         // This is an empty slot. Look for a later entry to move into this slot.
         for (UINT32 j = i + 1; j < ARRAYSIZE(raw->touchInfo); j++) {
           if (raw->touchInfo[j].touchInfo.pointerInfo.pointerFlags != POINTER_FLAG_NONE) {
             std::swap(raw->touchInfo[i], raw->touchInfo[j]);
+            raw->touchSlots.swap_slots(i, j);
             break;
           }
         }
@@ -906,6 +889,10 @@ namespace platf {
           break;
         }
       }
+    }
+
+    for (UINT32 j = i; j < ARRAYSIZE(raw->touchInfo); j++) {
+      raw->touchSlots.release(j);
     }
 
     // Update the number of active touch slots
@@ -923,33 +910,29 @@ namespace platf {
     // Compact active touches into a single contiguous block
     perform_touch_compaction(raw);
 
-    // Try to find a matching pointer ID
-    for (UINT32 i = 0; i < ARRAYSIZE(raw->touchInfo); i++) {
-      if (raw->touchInfo[i].touchInfo.pointerInfo.pointerId == pointerId && raw->touchInfo[i].touchInfo.pointerInfo.pointerFlags != POINTER_FLAG_NONE) {
-        if (eventType == LI_TOUCH_EVENT_DOWN && (raw->touchInfo[i].touchInfo.pointerInfo.pointerFlags & POINTER_FLAG_INCONTACT)) {
-          BOOST_LOG(warning) << "Pointer "sv << pointerId << " already down. Did the client drop an up/cancel event?"sv;
-        }
+    auto slot = raw->touchSlots.acquire(pointerId);
+    if (!slot) {
+      return nullptr;
+    }
 
-        return &raw->touchInfo[i];
+    auto &entry = raw->touchInfo[*slot];
+    if (entry.touchInfo.pointerInfo.pointerFlags != POINTER_FLAG_NONE) {
+      if (eventType == LI_TOUCH_EVENT_DOWN && (entry.touchInfo.pointerInfo.pointerFlags & POINTER_FLAG_INCONTACT)) {
+        BOOST_LOG(warning) << "Pointer "sv << pointerId << " already down. Did the client drop an up/cancel event?"sv;
       }
+
+      return &entry;
     }
 
     if (eventType != LI_TOUCH_EVENT_HOVER && eventType != LI_TOUCH_EVENT_DOWN) {
       BOOST_LOG(warning) << "Unexpected new pointer "sv << pointerId << " for event "sv << (uint32_t) eventType << ". Did the client drop a down/hover event?"sv;
     }
 
-    // If there was none, grab an unused entry and increment the active slot count
-    for (UINT32 i = 0; i < ARRAYSIZE(raw->touchInfo); i++) {
-      if (raw->touchInfo[i].touchInfo.pointerInfo.pointerFlags == POINTER_FLAG_NONE) {
-        // Clear the old contact before assigning a reused client pointer ID.
-        raw->touchInfo[i] = {};
-        raw->touchInfo[i].touchInfo.pointerInfo.pointerId = pointerId;
-        raw->activeTouchSlots = i + 1;
-        return &raw->touchInfo[i];
-      }
-    }
-
-    return nullptr;
+    // Clear the old contact before assigning a reused client pointer ID.
+    entry = {};
+    entry.touchInfo.pointerInfo.pointerId = pointerId;
+    raw->activeTouchSlots = *slot + 1;
+    return &entry;
   }
 
   /**
@@ -1019,13 +1002,11 @@ namespace platf {
    * @brief Repeats the current touch state to avoid the interactions timing out.
    * @param state Shared lifetime state for the client-specific input context.
    */
-  void repeat_touch(repeat_state_ptr state) {
-    std::unique_lock lock(state->mutex);
-    if (state->shutting_down || state->cancelling) {
+  void repeat_touch(repeat_state_ptr state, touch_repeat_scheduler_t::generation_t generation) {
+    if (!state->begin_callback(generation)) {
       return;
     }
 
-    ++state->active_callbacks;
     auto raw = state->owner;
     if (!raw || !inject_synthetic_pointer_input(raw->global, raw->touch, raw->touchInfo, raw->activeTouchSlots)) {
       if (raw) {
@@ -1034,22 +1015,21 @@ namespace platf {
       }
     }
 
-    schedule_repeat_locked(state, repeat_touch);
-    --state->active_callbacks;
-    state->condition.notify_all();
+    if (state->callback_may_reschedule(generation)) {
+      schedule_repeat(state, repeat_touch, generation);
+    }
+    state->finish_callback(generation);
   }
 
   /**
    * @brief Repeats the current pen state to avoid the interactions timing out.
    * @param state Shared lifetime state for the client-specific input context.
    */
-  void repeat_pen(repeat_state_ptr state) {
-    std::unique_lock lock(state->mutex);
-    if (state->shutting_down || state->cancelling) {
+  void repeat_pen(repeat_state_ptr state, touch_repeat_scheduler_t::generation_t generation) {
+    if (!state->begin_callback(generation)) {
       return;
     }
 
-    ++state->active_callbacks;
     auto raw = state->owner;
     if (!raw || !inject_synthetic_pointer_input(raw->global, raw->pen, &raw->penInfo, 1)) {
       if (raw) {
@@ -1058,9 +1038,10 @@ namespace platf {
       }
     }
 
-    schedule_repeat_locked(state, repeat_pen);
-    --state->active_callbacks;
-    state->condition.notify_all();
+    if (state->callback_may_reschedule(generation)) {
+      schedule_repeat(state, repeat_pen, generation);
+    }
+    state->finish_callback(generation);
   }
 
   /**
@@ -1109,6 +1090,7 @@ namespace platf {
 
     // Zero all touch state
     std::memset(raw->touchInfo, 0, sizeof(raw->touchInfo));
+    raw->touchSlots.clear();
     raw->activeTouchSlots = 0;
   }
 

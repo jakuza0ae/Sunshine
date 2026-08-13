@@ -4,10 +4,14 @@
  */
 #include "../tests_common.h"
 
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <limits>
+#include <thread>
 
 #include <src/input.h>
+#include <src/platform/windows/touch_scheduler.h>
 
 namespace {
   input::touch_port_t make_port(int offset_x = 0, int offset_y = 0, int width = 1920, int height = 1080) {
@@ -122,4 +126,83 @@ TEST(NativeTouchPolicy, DoesNotDependOnMousePolicy) {
 
   config::input.mouse = old_mouse;
   config::input.native_pen_touch = old_native_touch;
+}
+
+TEST(TouchSlots, ReusesReleasedPointerIdSlot) {
+  platf::touch_slot_tracker_t slots;
+
+  const auto first = slots.acquire(42);
+  ASSERT_TRUE(first.has_value());
+  slots.release(*first);
+
+  const auto reused = slots.acquire(42);
+  ASSERT_TRUE(reused.has_value());
+  EXPECT_EQ(*reused, *first);
+  EXPECT_EQ(slots.pointer_id(*reused), 42U);
+}
+
+TEST(TouchSlots, ClearRemovesEveryActiveSlot) {
+  platf::touch_slot_tracker_t slots;
+  ASSERT_TRUE(slots.acquire(1).has_value());
+  ASSERT_TRUE(slots.acquire(2).has_value());
+
+  slots.clear();
+
+  EXPECT_FALSE(slots.is_active(0));
+  EXPECT_FALSE(slots.is_active(1));
+  EXPECT_EQ(slots.acquire(3), std::optional<std::size_t> {0});
+}
+
+TEST(TouchRepeatScheduler, CancellationInvalidatesPoppedCallbackBeforeItCanReschedule) {
+  platf::touch_repeat_scheduler_t scheduler;
+  const auto generation = scheduler.queue([](auto) {
+    return nullptr;
+  });
+  ASSERT_TRUE(generation.has_value());
+  ASSERT_TRUE(scheduler.begin_callback(*generation));
+
+  std::atomic_bool cancel_finished = false;
+  std::thread cancellation([&]() {
+    scheduler.begin_cancel(false);
+    scheduler.finish_cancel();
+    cancel_finished = true;
+  });
+
+  while (!scheduler.is_cancelling()) {
+    std::this_thread::yield();
+  }
+  EXPECT_FALSE(scheduler.callback_may_reschedule(*generation));
+  EXPECT_FALSE(cancel_finished.load());
+
+  scheduler.finish_callback(*generation);
+  cancellation.join();
+
+  EXPECT_TRUE(cancel_finished.load());
+  EXPECT_FALSE(scheduler.begin_callback(*generation));
+  EXPECT_FALSE(scheduler.queue(*generation, [](auto) {
+    return nullptr;
+  }).has_value());
+  EXPECT_TRUE(scheduler.queue([](auto) {
+    return nullptr;
+  }).has_value());
+}
+
+TEST(TouchRepeatScheduler, PreservesFiftyMillisecondKeepaliveTransitions) {
+  EXPECT_EQ(platf::touch_keepalive_interval, 50ms);
+
+  platf::touch_repeat_scheduler_t scheduler;
+  auto generation = scheduler.queue([](auto) {
+    return nullptr;
+  });
+  ASSERT_TRUE(generation.has_value());
+
+  for (int i = 0; i < 3; ++i) {
+    ASSERT_TRUE(scheduler.begin_callback(*generation));
+    EXPECT_TRUE(scheduler.callback_may_reschedule(*generation));
+    scheduler.finish_callback(*generation);
+    generation = scheduler.queue([](auto) {
+      return nullptr;
+    });
+    ASSERT_TRUE(generation.has_value());
+  }
 }
