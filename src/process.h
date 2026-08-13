@@ -161,6 +161,7 @@ namespace proc {
 
     // If no command associated with _app_id, yet it's still running
     bool placebo {};
+    bool _second_monitor_session {};
 
     boost::process::v1::child _process;
     boost::process::v1::group _process_group;

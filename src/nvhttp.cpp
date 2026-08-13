@@ -394,6 +394,7 @@ namespace nvhttp {
     launch_session->continuous_audio = util::from_view(get_arg(args, "continuousAudio", "0"));
     launch_session->gcmap = (int) util::from_view(get_arg(args, "gcmap", "0"));
     launch_session->enable_hdr = util::from_view(get_arg(args, "hdrMode", "0"));
+    launch_session->second_monitor = get_arg(args, "secondMonitor", "0") == "1";
 
     // Encrypted RTSP is enabled with client reported corever >= 1
     auto corever = util::from_view(get_arg(args, "corever", "0"));
@@ -994,6 +995,7 @@ namespace nvhttp {
 
     pt::ptree tree;
     bool revert_display_configuration {false};
+    bool second_monitor_session {false};
     auto g = util::fail_guard([&]() {
       std::ostringstream data;
 
@@ -1006,7 +1008,7 @@ namespace nvhttp {
       response->close_connection_after_response = true;
 
       if (revert_display_configuration) {
-        display_device::revert_configuration();
+        display_device::revert_configuration(second_monitor_session);
       }
     });
 
@@ -1037,26 +1039,34 @@ namespace nvhttp {
 
     host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
     auto launch_session = make_launch_session(host_audio, args);
+    second_monitor_session = launch_session->second_monitor;
+    const auto session_video_config {config::video_for_session(config::video, second_monitor_session)};
+    if (!session_video_config) {
+      tree.put("root.<xmlattr>.status_code", 503);
+      tree.put("root.<xmlattr>.status_message", "The second-monitor profile configuration is invalid or disabled");
+      tree.put("root.gamesession", 0);
+      return;
+    }
 
     if (rtsp_stream::session_count() == 0) {
       // The display should be restored in case something fails as there are no other sessions.
       revert_display_configuration = true;
 
-      const auto display_selection {display_device::get_display_selection(config::video)};
+      const auto display_selection {display_device::get_display_selection(*session_video_config)};
       if (display_selection.unavailable) {
-        display_device::mark_display_configuration(false);
+        display_device::mark_display_configuration(false, second_monitor_session);
         tree.put("root.<xmlattr>.status_code", 503);
         tree.put("root.<xmlattr>.status_message", "The configured virtual display is unavailable");
         tree.put("root.gamesession", 0);
         return;
       }
 
-      display_device::mark_display_configuration(true);
+      display_device::mark_display_configuration(true, second_monitor_session);
 
       // We want to prepare display only if there are no active sessions at
       // the moment. This should be done before probing encoders as it could
       // change the active displays.
-      display_device::configure_display(config::video, *launch_session);
+      display_device::configure_display(*session_video_config, *launch_session);
 
       // Probe encoders again before streaming to ensure our chosen
       // encoder matches the active GPU (which could have changed
@@ -1070,13 +1080,6 @@ namespace nvhttp {
         return;
       }
 
-      display_device::mark_capture_started(
-        display_selection.selected_device_id,
-        display_selection.mapped_display_name,
-        static_cast<unsigned int>(std::max(0, launch_session->width)),
-        static_cast<unsigned int>(std::max(0, launch_session->height)),
-        static_cast<unsigned int>(std::max(0, launch_session->fps))
-      );
     }
 
     auto encryption_mode = net::encryption_mode_for_address(request->remote_endpoint().address());
@@ -1130,6 +1133,8 @@ namespace nvhttp {
     print_req<SunshineHTTPS>(request);
 
     pt::ptree tree;
+    bool revert_display_configuration {false};
+    bool second_monitor_session {false};
     auto g = util::fail_guard([&]() {
       std::ostringstream data;
 
@@ -1140,6 +1145,10 @@ namespace nvhttp {
       pt::write_xml(data, tree);
       response->write(data.str());
       response->close_connection_after_response = true;
+
+      if (revert_display_configuration) {
+        display_device::revert_configuration(second_monitor_session);
+      }
     });
 
     auto current_appid = proc::proc.running();
@@ -1171,23 +1180,32 @@ namespace nvhttp {
       host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
     }
     const auto launch_session = make_launch_session(host_audio, args);
+    second_monitor_session = launch_session->second_monitor;
+    const auto session_video_config {config::video_for_session(config::video, second_monitor_session)};
+    if (!session_video_config) {
+      tree.put("root.resume", 0);
+      tree.put("root.<xmlattr>.status_code", 503);
+      tree.put("root.<xmlattr>.status_message", "The second-monitor profile configuration is invalid or disabled");
+      return;
+    }
 
     if (no_active_sessions) {
-      const auto display_selection {display_device::get_display_selection(config::video)};
+      revert_display_configuration = true;
+      const auto display_selection {display_device::get_display_selection(*session_video_config)};
       if (display_selection.unavailable) {
-        display_device::mark_display_configuration(false);
+        display_device::mark_display_configuration(false, second_monitor_session);
         tree.put("root.resume", 0);
         tree.put("root.<xmlattr>.status_code", 503);
         tree.put("root.<xmlattr>.status_message", "The configured virtual display is unavailable");
         return;
       }
 
-      display_device::mark_display_configuration(true);
+      display_device::mark_display_configuration(true, second_monitor_session);
 
       // We want to prepare display only if there are no active sessions at
       // the moment. This should be done before probing encoders as it could
       // change the active displays.
-      display_device::configure_display(config::video, *launch_session);
+      display_device::configure_display(*session_video_config, *launch_session);
 
       // Probe encoders again before streaming to ensure our chosen
       // encoder matches the active GPU (which could have changed
@@ -1201,13 +1219,6 @@ namespace nvhttp {
         return;
       }
 
-      display_device::mark_capture_started(
-        display_selection.selected_device_id,
-        display_selection.mapped_display_name,
-        static_cast<unsigned int>(std::max(0, launch_session->width)),
-        static_cast<unsigned int>(std::max(0, launch_session->height)),
-        static_cast<unsigned int>(std::max(0, launch_session->fps))
-      );
     }
 
     auto encryption_mode = net::encryption_mode_for_address(request->remote_endpoint().address());
@@ -1234,6 +1245,7 @@ namespace nvhttp {
     tree.put("root.resume", 1);
 
     rtsp_stream::launch_session_raise(launch_session);
+    revert_display_configuration = false;
   }
 
   /**

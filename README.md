@@ -47,6 +47,8 @@ second_monitor_display_policy=vdd_only
 second_monitor_restore_on_disconnect=true
 ```
 
+Sunshine applies these profile values only when an authenticated launch carries the explicit `secondMonitor=1` session marker from Moonlight. Unmarked game launches retain the regular display and audio configuration. Invalid second-monitor configuration is rejected for marked launches with a visible retryable error; it is never replaced with a physical-display fallback.
+
 The authenticated `GET /api/second-monitor/status` endpoint follows the shared record in `docs/superpowers/validation/second-monitor-test-matrix.md`: state, host display identity, mapped output, capture backend, encoder, codec, resolution, FPS, bitrate, RTT, dropped frames, reconnect count, and last error. Host-side `rtt_ms`, `dropped_frames`, and `reconnect_count` are currently JSON `null` because this status path has no host telemetry source; they must not be read as zero. The endpoint sanitizes untrusted display metadata and does not return credentials, pairing keys, or command content.
 
 Use the validation matrix in the Moonlight checkout for the complete VDD, touch, network, restore, and no-fallback matrix. Moonlight's local RTT, dropped-frame, and reconnect values are client metrics and are not host metrics.

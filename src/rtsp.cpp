@@ -608,8 +608,8 @@ namespace rtsp_stream {
           auto discarded = launch_event.pop(0s);
           if (discarded) {
             BOOST_LOG(debug) << "Event timeout: "sv << discarded->unique_id;
-            if (display_device::mark_launch_failed(config::video.second_monitor.restore_on_disconnect)) {
-              display_device::revert_configuration();
+            if (display_device::mark_launch_failed(config::video.second_monitor.restore_on_disconnect, discarded->second_monitor)) {
+              display_device::revert_configuration(discarded->second_monitor);
             }
           }
         }
@@ -1144,6 +1144,8 @@ namespace rtsp_stream {
     stream::config_t config;
 
     std::int64_t configuredBitrateKbps;
+    config.monitor.second_monitor = session.second_monitor;
+    config.audio.stream_audio = session.second_monitor ? config::video.second_monitor.stream_audio : config::audio.stream;
     config.audio.flags[audio::config_t::HOST_AUDIO] = session.host_audio;
     try {
       config.audio.channels = (int) util::from_view(args.at("x-nv-audio.surround.numChannels"sv));

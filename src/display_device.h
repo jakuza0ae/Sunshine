@@ -120,6 +120,7 @@ namespace display_device {
     std::size_t m_session_owners {};
     bool m_restore_scheduled {};
     bool m_restore_request_pending {};
+    bool m_display_configured {};
   };
 
   /**
@@ -130,37 +131,42 @@ namespace display_device {
   /**
    * @brief Record the beginning of display configuration for an enabled profile.
    */
-  void mark_display_configuration(bool vdd_available);
+  void mark_display_configuration(bool vdd_available, bool second_monitor_session = false);
 
   /**
    * @brief Record the beginning of capture for an enabled profile.
    */
-  void mark_capture_started(const std::string &selected_device_id, const std::string &mapped_output, unsigned int width, unsigned int height, unsigned int fps);
+  void mark_capture_started(const std::string &selected_device_id, const std::string &mapped_output, unsigned int width, unsigned int height, unsigned int fps, bool second_monitor_session = false);
+
+  /**
+   * @brief Record that initial VDD capture is waiting for the device to reappear.
+   */
+  void mark_capture_waiting_for_vdd(bool second_monitor_session = false);
 
   /**
    * @brief Record a capture retry reason.
    */
-  void mark_capture_reinitializing(std::string reason);
+  void mark_capture_reinitializing(std::string reason, bool second_monitor_session = false);
 
   /**
    * @brief Record a successfully owned stream session.
    */
-  void mark_session_started(std::string codec, unsigned int bitrate_kbps);
+  void mark_session_started(std::string codec, unsigned int bitrate_kbps, bool second_monitor_session = false);
 
   /**
    * @brief Record a stopped stream and return whether final restore should run.
    */
-  [[nodiscard]] bool mark_session_stopped(bool restore_enabled);
+  [[nodiscard]] bool mark_session_stopped(bool restore_enabled, bool second_monitor_session = false);
 
   /**
    * @brief Record a failed launch and return whether final restore should run.
    */
-  [[nodiscard]] bool mark_launch_failed(bool restore_enabled);
+  [[nodiscard]] bool mark_launch_failed(bool restore_enabled, bool second_monitor_session = false);
 
   /**
    * @brief Record successful capture reinitialization.
    */
-  void mark_capture_reinitialized();
+  void mark_capture_reinitialized(bool second_monitor_session = false);
 
   /**
    * @brief Resolved display selection used by display configuration and capture.
@@ -272,7 +278,7 @@ namespace display_device {
    * revert_configuration();
    * @examples_end
    */
-  void revert_configuration();
+  void revert_configuration(bool second_monitor_session = false);
 
   /**
    * @brief Reset persisted display state and the captured initial state.

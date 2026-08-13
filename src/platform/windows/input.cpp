@@ -871,32 +871,12 @@ namespace platf {
    */
   void perform_touch_compaction(client_input_raw_t *raw) {
     // Windows requires all active touches be contiguous when fed into InjectSyntheticPointerInput().
-    UINT32 i;
-    for (i = 0; i < ARRAYSIZE(raw->touchInfo); i++) {
-      if (raw->touchInfo[i].touchInfo.pointerInfo.pointerFlags == POINTER_FLAG_NONE) {
-        raw->touchSlots.release(i);
-        // This is an empty slot. Look for a later entry to move into this slot.
-        for (UINT32 j = i + 1; j < ARRAYSIZE(raw->touchInfo); j++) {
-          if (raw->touchInfo[j].touchInfo.pointerInfo.pointerFlags != POINTER_FLAG_NONE) {
-            std::swap(raw->touchInfo[i], raw->touchInfo[j]);
-            raw->touchSlots.swap_slots(i, j);
-            break;
-          }
-        }
-
-        // If we didn't find anything, we've reached the end of active slots.
-        if (raw->touchInfo[i].touchInfo.pointerInfo.pointerFlags == POINTER_FLAG_NONE) {
-          break;
-        }
-      }
+    raw->activeTouchSlots = static_cast<UINT32>(raw->touchSlots.compact([raw](const std::size_t first, const std::size_t second) {
+      std::swap(raw->touchInfo[first], raw->touchInfo[second]);
+    }));
+    for (UINT32 slot = raw->activeTouchSlots; slot < ARRAYSIZE(raw->touchInfo); ++slot) {
+      raw->touchInfo[slot] = {};
     }
-
-    for (UINT32 j = i; j < ARRAYSIZE(raw->touchInfo); j++) {
-      raw->touchSlots.release(j);
-    }
-
-    // Update the number of active touch slots
-    raw->activeTouchSlots = i;
   }
 
   /**
@@ -1227,11 +1207,17 @@ namespace platf {
       return;
     }
 
+    const bool contact_ended = touch.eventType == LI_TOUCH_EVENT_UP || touch.eventType == LI_TOUCH_EVENT_CANCEL;
+
     // Clear pointer flags that should only remain set for one frame
     touchInfo.pointerInfo.pointerFlags &= ~EDGE_TRIGGERED_POINTER_FLAGS;
 
+    if (contact_ended) {
+      perform_touch_compaction(raw);
+    }
+
     // If we still have an active touch, refresh the touch state periodically
-    if (raw->activeTouchSlots > 1 || touchInfo.pointerInfo.pointerFlags != POINTER_FLAG_NONE) {
+    if (raw->activeTouchSlots > 0) {
       schedule_repeat(raw->touchRepeat, repeat_touch);
     }
   }

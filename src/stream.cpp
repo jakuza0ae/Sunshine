@@ -2181,7 +2181,8 @@ namespace stream {
       BOOST_LOG(debug) << "Resetting Input..."sv;
       input::reset(session.input);
 
-      const bool restore_second_monitor {display_device::mark_session_stopped(config::video.second_monitor.restore_on_disconnect)};
+      const bool second_monitor_session {session.config.monitor.second_monitor};
+      const bool restore_second_monitor {display_device::mark_session_stopped(config::video.second_monitor.restore_on_disconnect, second_monitor_session)};
 
       // If this is the last session, invoke the platform callbacks
       if (--running_sessions == 0) {
@@ -2196,7 +2197,7 @@ namespace stream {
         }
 
         if (revert_display_config || restore_second_monitor) {
-          display_device::revert_configuration();
+          display_device::revert_configuration(second_monitor_session);
         }
 
         platf::streaming_will_stop();
@@ -2213,8 +2214,8 @@ namespace stream {
 
       session.broadcast_ref = broadcast.ref();
       if (!session.broadcast_ref) {
-        if (display_device::mark_launch_failed(config::video.second_monitor.restore_on_disconnect)) {
-          display_device::revert_configuration();
+        if (display_device::mark_launch_failed(config::video.second_monitor.restore_on_disconnect, session.config.monitor.second_monitor)) {
+          display_device::revert_configuration(session.config.monitor.second_monitor);
         }
         return -1;
       }
@@ -2251,9 +2252,9 @@ namespace stream {
       }
 
       const auto codec {
-        session->config.monitor.videoFormat == 1 ? "hevc" : session->config.monitor.videoFormat == 2 ? "av1" : "h264"
+        session.config.monitor.videoFormat == 1 ? "hevc" : session.config.monitor.videoFormat == 2 ? "av1" : "h264"
       };
-      display_device::mark_session_started(codec, static_cast<unsigned int>(std::max(0, session->config.monitor.bitrate)));
+      display_device::mark_session_started(codec, static_cast<unsigned int>(std::max(0, session.config.monitor.bitrate)), session.config.monitor.second_monitor);
 
       return 0;
     }

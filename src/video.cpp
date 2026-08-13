@@ -1455,11 +1455,11 @@ namespace video {
    * @param display_names The list of display names to repopulate.
    * @param current_display_index The current display index or -1 if not yet known.
    */
-  bool refresh_displays(platf::mem_type_e dev_type, std::vector<std::string> &display_names, int &current_display_index) {
-    const auto selection {display_device::get_display_selection(config::video)};
+  bool refresh_displays(platf::mem_type_e dev_type, std::vector<std::string> &display_names, int &current_display_index, const config::video_t &video_config) {
+    const auto selection {display_device::get_display_selection(video_config)};
     const bool vdd_only {
-      config::video.dd.configuration_option == config::video_t::dd_t::config_option_e::vdd_only &&
-      !config::video.output_name.empty()
+      video_config.dd.configuration_option == config::video_t::dd_t::config_option_e::vdd_only &&
+      !video_config.output_name.empty()
     };
     if (selection.unavailable) {
       BOOST_LOG(warning) << "The configured VDD is unavailable; display capture will retry without selecting a physical display."sv;
@@ -1571,18 +1571,45 @@ namespace video {
       return;
     }
     capture_ctxs.emplace_back(std::move(*initial_capture_ctx));
+    const auto session_video_config {config::video_for_session(config::video, capture_ctxs.front().config.second_monitor)};
+    if (!session_video_config) {
+      return;
+    }
 
     // Get all the monitor names now, rather than at boot, to
     // get the most up-to-date list available monitors
     std::vector<std::string> display_names;
     int display_p = -1;
-    if (!refresh_displays(encoder.platform_formats->dev_type, display_names, display_p)) {
-      return;
+    std::shared_ptr<platf::display_t> disp;
+    while (capture_ctx_queue->running()) {
+      if (!refresh_displays(encoder.platform_formats->dev_type, display_names, display_p, *session_video_config)) {
+        if (!capture_ctxs.front().config.second_monitor) {
+          return;
+        }
+        display_device::mark_capture_waiting_for_vdd(true);
+        std::this_thread::sleep_for(200ms);
+        continue;
+      }
+
+      disp = platf::display(encoder.platform_formats->dev_type, display_names[display_p], capture_ctxs.front().config);
+      if (disp) {
+        break;
+      }
+      if (!capture_ctxs.front().config.second_monitor) {
+        return;
+      }
+      display_device::mark_capture_waiting_for_vdd(true);
+      std::this_thread::sleep_for(200ms);
     }
-    auto disp = platf::display(encoder.platform_formats->dev_type, display_names[display_p], capture_ctxs.front().config);
     if (!disp) {
       return;
     }
+    const auto selection {display_device::get_display_selection(*session_video_config)};
+    display_device::mark_capture_started(selection.selected_device_id, selection.mapped_display_name,
+                                         static_cast<unsigned int>(std::max(0, capture_ctxs.front().config.width)),
+                                         static_cast<unsigned int>(std::max(0, capture_ctxs.front().config.height)),
+                                         static_cast<unsigned int>(std::max(0, capture_ctxs.front().config.framerate)),
+                                         capture_ctxs.front().config.second_monitor);
     display_wp = disp;
 
     constexpr auto capture_buffer_size = 12;
@@ -1731,7 +1758,7 @@ namespace video {
       switch (status) {
         case platf::capture_e::reinit:
           {
-            display_device::mark_capture_reinitializing("capture backend requested reinitialization");
+            display_device::mark_capture_reinitializing("capture backend requested reinitialization", capture_ctxs.front().config.second_monitor);
             reinit_event.raise(true);
 
             // Some classes of images contain references to the display --> display won't delete unless img is deleted
@@ -1768,7 +1795,10 @@ namespace video {
               disp.reset();
 
               // Refresh display names since a display removal might have caused the reinitialization
-              if (!refresh_displays(encoder.platform_formats->dev_type, display_names, display_p)) {
+              if (!refresh_displays(encoder.platform_formats->dev_type, display_names, display_p, *session_video_config)) {
+                if (capture_ctxs.front().config.second_monitor) {
+                  display_device::mark_capture_waiting_for_vdd(true);
+                }
                 std::this_thread::sleep_for(200ms);
                 continue;
               }
@@ -1776,7 +1806,7 @@ namespace video {
               // Process any pending display switch with the new list of displays
               if (switch_display_event->peek()) {
                 const auto requested_display {switch_display_event->pop()};
-                if (config::video.dd.configuration_option != config::video_t::dd_t::config_option_e::vdd_only || config::video.output_name.empty()) {
+                if (session_video_config->dd.configuration_option != config::video_t::dd_t::config_option_e::vdd_only || session_video_config->output_name.empty()) {
                   display_p = std::clamp(*requested_display, 0, static_cast<int>(display_names.size()) - 1);
                 }
               }
@@ -1793,7 +1823,7 @@ namespace video {
 
             display_wp = disp;
 
-            display_device::mark_capture_reinitialized();
+            display_device::mark_capture_reinitialized(capture_ctxs.front().config.second_monitor);
 
             reinit_event.reset();
             continue;
@@ -2698,9 +2728,17 @@ namespace video {
       synced_session_ctxs.emplace_back(std::make_unique<sync_session_ctx_t>(std::move(*ctx)));
     }
 
+    const auto session_video_config {config::video_for_session(config::video, synced_session_ctxs.front()->config.second_monitor)};
+    if (!session_video_config) {
+      return encode_e::error;
+    }
+
     while (encode_session_ctx_queue.running()) {
       // Refresh display names since a display removal might have caused the reinitialization
-      if (!refresh_displays(encoder.platform_formats->dev_type, display_names, display_p)) {
+      if (!refresh_displays(encoder.platform_formats->dev_type, display_names, display_p, *session_video_config)) {
+        if (synced_session_ctxs.front()->config.second_monitor) {
+          display_device::mark_capture_waiting_for_vdd(true);
+        }
         std::this_thread::sleep_for(200ms);
         continue;
       }
@@ -2708,7 +2746,7 @@ namespace video {
       // Process any pending display switch with the new list of displays
       if (switch_display_event->peek()) {
         const auto requested_display {switch_display_event->pop()};
-        if (config::video.dd.configuration_option != config::video_t::dd_t::config_option_e::vdd_only || config::video.output_name.empty()) {
+        if (session_video_config->dd.configuration_option != config::video_t::dd_t::config_option_e::vdd_only || session_video_config->output_name.empty()) {
           display_p = std::clamp(*requested_display, 0, static_cast<int>(display_names.size()) - 1);
         }
       }
@@ -2718,11 +2756,21 @@ namespace video {
       if (disp) {
         break;
       }
+      if (synced_session_ctxs.front()->config.second_monitor) {
+        display_device::mark_capture_waiting_for_vdd(true);
+      }
     }
 
     if (!disp) {
       return encode_e::error;
     }
+
+    const auto selection {display_device::get_display_selection(*session_video_config)};
+    display_device::mark_capture_started(selection.selected_device_id, selection.mapped_display_name,
+                                         static_cast<unsigned int>(std::max(0, synced_session_ctxs.front()->config.width)),
+                                         static_cast<unsigned int>(std::max(0, synced_session_ctxs.front()->config.height)),
+                                         static_cast<unsigned int>(std::max(0, synced_session_ctxs.front()->config.framerate)),
+                                         synced_session_ctxs.front()->config.second_monitor);
 
     auto img = disp->alloc_img();
     if (!img || disp->dummy_img(img.get())) {

@@ -156,7 +156,7 @@ namespace audio {
    */
   void capture(safe::mail_t mail, config_t config, void *channel_data) {
     auto shutdown_event = mail->event<bool>(mail::shutdown);
-    if (!config::audio.stream) {
+    if (!config.stream_audio) {
       shutdown_event->view();
       return;
     }

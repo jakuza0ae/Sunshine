@@ -163,6 +163,7 @@ namespace proc {
 
     _app_id = app_id;
     _app = *iter;
+    _second_monitor_session = launch_session->second_monitor;
     _app_prep_begin = std::begin(_app.prep_cmds);
     _app_prep_it = _app_prep_begin;
 
@@ -189,17 +190,6 @@ namespace proc {
         break;
     }
     _env["SUNSHINE_CLIENT_AUDIO_SURROUND_PARAMS"] = launch_session->surround_params;
-
-    if (config::video.second_monitor.enabled()) {
-      _env["SUNSHINE_SECOND_MONITOR_DEVICE_ID"] = config::video.second_monitor.device_id;
-      _env["SUNSHINE_SECOND_MONITOR_RESOLUTION"] = config::video.second_monitor.resolution;
-      _env["SUNSHINE_SECOND_MONITOR_FPS"] = std::to_string(config::video.second_monitor.fps);
-      _env["SUNSHINE_SECOND_MONITOR_HDR"] = config::video.second_monitor.hdr ? "true" : "false";
-      _env["SUNSHINE_SECOND_MONITOR_CAPTURE_BACKEND"] = config::video.second_monitor.capture_backend;
-      _env["SUNSHINE_SECOND_MONITOR_STREAM_AUDIO"] = config::video.second_monitor.stream_audio ? "true" : "false";
-      _env["SUNSHINE_SECOND_MONITOR_DISPLAY_POLICY"] = "vdd_only";
-      _env["SUNSHINE_SECOND_MONITOR_RESTORE_ON_DISCONNECT"] = config::video.second_monitor.restore_on_disconnect ? "true" : "false";
-    }
 
     if (!_app.output.empty() && _app.output != "null"sv) {
 #ifdef _WIN32
@@ -371,10 +361,11 @@ namespace proc {
       system_tray::update_tray_stopped(proc::proc.get_last_run_app_name());
 #endif
 
-      display_device::revert_configuration();
+      display_device::revert_configuration(_second_monitor_session);
     }
 
     _app_id = -1;
+    _second_monitor_session = false;
   }
 
   const std::vector<ctx_t> &proc_t::get_apps() const {

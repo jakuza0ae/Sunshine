@@ -4,6 +4,7 @@
  */
 #include "../tests_common.h"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -168,6 +169,25 @@ TEST(TouchSlots, CompactionSwapPreservesPointerIdsBeforeReuse) {
 
   slots.release(0);
   EXPECT_EQ(slots.acquire(33), std::optional<std::size_t> {0});
+}
+
+TEST(TouchSlots, CompactionAfterContactEndKeepsRemainingContactsContiguous) {
+  platf::touch_slot_tracker_t slots;
+  ASSERT_EQ(slots.acquire(11), std::optional<std::size_t> {0});
+  ASSERT_EQ(slots.acquire(22), std::optional<std::size_t> {1});
+  slots.release(0);
+
+  std::array<std::uint32_t, platf::touch_slot_tracker_t::max_slots> pointer_ids {};
+  pointer_ids[0] = 11;
+  pointer_ids[1] = 22;
+  const auto active_slots {slots.compact([&pointer_ids](const std::size_t first, const std::size_t second) {
+    std::swap(pointer_ids[first], pointer_ids[second]);
+  })};
+
+  EXPECT_EQ(active_slots, 1U);
+  EXPECT_EQ(pointer_ids[0], 22U);
+  EXPECT_EQ(slots.pointer_id(0), 22U);
+  EXPECT_FALSE(slots.is_active(1));
 }
 
 TEST(TouchRepeatScheduler, CancellationInvalidatesPoppedCallbackBeforeItCanReschedule) {

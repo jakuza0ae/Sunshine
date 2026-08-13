@@ -130,9 +130,10 @@ namespace confighttp {
    * @return The original known-safe value, a bounded redaction marker, or empty text.
    */
   std::string safe_second_monitor_diagnostic_text(const std::string_view value) {
-    constexpr std::array<std::string_view, 7> safe_values {
+    constexpr std::array<std::string_view, 8> safe_values {
       "",
       "vdd_unavailable",
+      "invalid_profile",
       "capture_reinitializing",
       "launch_failed",
       "restore_failed",
@@ -1128,6 +1129,9 @@ namespace confighttp {
       return value ? nlohmann::json {*value} : nlohmann::json {nullptr};
     };
     nlohmann::json devices = nlohmann::json::array();
+    const auto resolution_json = [](const unsigned int width, const unsigned int height) {
+      return width == 0 || height == 0 ? nlohmann::json {nullptr} : nlohmann::json {std::format("{}x{}", width, height)};
+    };
     for (const auto &device : status.devices) {
       devices.push_back({
         {"device_id", diagnostic_text_json(device.device_id)},
@@ -1135,7 +1139,7 @@ namespace confighttp {
         {"friendly_name", diagnostic_text_json(device.friendly_name)},
         {"active", device.active},
         {"virtual_device", virtual_device_json(device.virtual_device)},
-        {"current_resolution", std::format("{}x{}", device.current_width, device.current_height)}
+        {"current_resolution", resolution_json(device.current_width, device.current_height)}
       });
     }
 
@@ -1156,7 +1160,7 @@ namespace confighttp {
       {"friendly_name", diagnostic_text_json(status.friendly_name)},
       {"active", status.active},
       {"virtual_device", virtual_device_json(status.virtual_device)},
-      {"current_resolution", std::format("{}x{}", status.current_width, status.current_height)},
+      {"current_resolution", resolution_json(status.current_width, status.current_height)},
       {"devices", std::move(devices)},
       {"capture_backend", diagnostic_text_json(status.capture_backend)},
       {"encoder", diagnostic_text_json(status.encoder)},

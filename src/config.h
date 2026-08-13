@@ -226,9 +226,19 @@ namespace config {
       }
     } second_monitor;  ///< Optional second-monitor profile.
 
+    bool second_monitor_profile_invalid {};  ///< True when a requested second-monitor profile failed strict parsing.
+
     int max_bitrate;  ///< Maximum bitrate ceiling in kbps for bitrate requested from the client.
     double minimum_fps_target;  ///< Lowest framerate that will be used when streaming. Range 0-1000, 0 = half of client's requested framerate.
   };
+
+  /**
+   * @brief Build the display configuration for one launch session.
+   * @param video_config Global video configuration.
+   * @param second_monitor_session Whether the launch explicitly selected second-monitor mode.
+   * @return A session configuration, or empty when the marked profile is invalid or disabled.
+   */
+  [[nodiscard]] std::optional<video_t> video_for_session(const video_t &video_config, bool second_monitor_session);
 
   /**
    * @brief Audio capture and encoder settings loaded from configuration.

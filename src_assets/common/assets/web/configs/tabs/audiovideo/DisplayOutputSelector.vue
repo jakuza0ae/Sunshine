@@ -24,6 +24,8 @@ function updateSecondMonitorPolicy() {
 }
 
 async function refreshSecondMonitorStatus() {
+  secondMonitorStatus.value = null
+  statusError.value = ''
   try {
     const response = await fetch('/api/second-monitor/status', { credentials: 'same-origin' })
     if (!response.ok) {

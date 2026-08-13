@@ -101,6 +101,32 @@ namespace platf {
       m_active[second] = first_active;
     }
 
+    /**
+     * @brief Move active contacts into the contiguous range required by Windows.
+     * @param swap_entries Callback that swaps the matching platform pointer entries.
+     * @return Number of active contiguous slots after compaction.
+     */
+    template<typename SwapEntries>
+    std::size_t compact(SwapEntries &&swap_entries) {
+      std::size_t next_slot = 0;
+      for (std::size_t slot = 0; slot < max_slots; ++slot) {
+        if (!m_active[slot]) {
+          continue;
+        }
+
+        if (slot != next_slot) {
+          swap_entries(next_slot, slot);
+          swap_slots(next_slot, slot);
+        }
+        ++next_slot;
+      }
+
+      for (std::size_t slot = next_slot; slot < max_slots; ++slot) {
+        release(slot);
+      }
+      return next_slot;
+    }
+
   private:
     std::array<std::uint32_t, max_slots> m_pointer_ids {};
     std::bitset<max_slots> m_active {};

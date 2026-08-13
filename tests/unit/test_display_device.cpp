@@ -319,6 +319,39 @@ TEST(SecondMonitorProfile, UsesFixedDisplayModeWithoutClientSops) {
   EXPECT_EQ(parsed.m_hdr_state, std::optional<hdr_state_e> {hdr_state_e::Enabled});
 }
 
+TEST(SecondMonitorProfile, AppliesVddSettingsOnlyToMarkedSessions) {
+  config::video_t video_config {};
+  video_config.capture = "regular-capture";
+  video_config.output_name = "regular-output";
+  video_config.dd.configuration_option = config_option_e::disabled;
+  video_config.second_monitor.device_id = "{vdd-guid}";
+  video_config.second_monitor.capture_backend = "ddx";
+  video_config.second_monitor.resolution = "1280x720";
+  video_config.second_monitor.fps = 30;
+  video_config.second_monitor.display_policy = config_option_e::vdd_only;
+
+  const auto regular_session {config::video_for_session(video_config, false)};
+  const auto second_monitor_session {config::video_for_session(video_config, true)};
+
+  ASSERT_TRUE(regular_session);
+  ASSERT_TRUE(second_monitor_session);
+  EXPECT_EQ(regular_session->output_name, "regular-output");
+  EXPECT_EQ(regular_session->dd.configuration_option, config_option_e::disabled);
+  EXPECT_EQ(second_monitor_session->output_name, "{vdd-guid}");
+  EXPECT_EQ(second_monitor_session->dd.configuration_option, config_option_e::vdd_only);
+  EXPECT_EQ(second_monitor_session->capture, "ddx");
+}
+
+TEST(SecondMonitorProfile, InvalidProfileFailsClosedOnlyForMarkedSessions) {
+  config::video_t video_config {};
+  video_config.second_monitor_profile_invalid = true;
+  video_config.second_monitor.device_id = "{bad-vdd-guid}";
+  video_config.second_monitor.display_policy = config_option_e::vdd_only;
+
+  ASSERT_TRUE(config::video_for_session(video_config, false));
+  EXPECT_FALSE(config::video_for_session(video_config, true));
+}
+
 TEST(SecondMonitorLifecycle, VddAppearingDuringRetryMovesToConfiguration) {
   display_device::second_monitor_lifecycle_t lifecycle;
 
@@ -330,6 +363,15 @@ TEST(SecondMonitorLifecycle, VddAppearingDuringRetryMovesToConfiguration) {
 
   lifecycle.retry(true);
   EXPECT_EQ(lifecycle.status().state, "display_configuring");
+}
+
+TEST(SecondMonitorLifecycle, InitialVddLossStaysRetryableInsteadOfReportingCapture) {
+  display_device::second_monitor_lifecycle_t lifecycle;
+
+  lifecycle.launch_requested(false);
+
+  EXPECT_FALSE(lifecycle.launch_failed(true));
+  EXPECT_EQ(lifecycle.status().state, "waiting_for_vdd");
 }
 
 TEST(SecondMonitorLifecycle, FailedLaunchSchedulesOneRestore) {
@@ -484,6 +526,20 @@ TEST(SecondMonitorDiagnostics, UsesNullForUnavailableMetricsAndSanitizesUntruste
   EXPECT_EQ(serialized.find("powershell"), std::string::npos);
   EXPECT_EQ(serialized.find("pairing-key"), std::string::npos);
   EXPECT_EQ(serialized.find("password"), std::string::npos);
+}
+
+TEST(SecondMonitorDiagnostics, UsesNullForUnavailableDeviceDimensions) {
+  display_device::second_monitor_status_t status;
+  status.devices.push_back({
+    .device_id = "{vdd-guid}",
+    .display_name = "",
+    .friendly_name = "Virtual Display"
+  });
+
+  const auto json {confighttp::serialize_second_monitor_status(status)};
+
+  EXPECT_TRUE(json.at("current_resolution").is_null());
+  EXPECT_TRUE(json.at("devices").at(0).at("current_resolution").is_null());
 }
 
 TEST(DisplayDeviceClassification, UsesVirtualIdentitySignalsAndUnknownWhenMetadataIsInsufficient) {

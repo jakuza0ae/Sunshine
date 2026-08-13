@@ -71,6 +71,7 @@ namespace audio {
     stream_params_t customStreamParams;  ///< Custom Opus layout used when CUSTOM_SURROUND_PARAMS is enabled.
 
     std::bitset<MAX_FLAGS> flags;  ///< Enabled audio feature flags.
+    bool stream_audio {};  ///< Whether this session sends captured audio packets.
   };
 
   /**

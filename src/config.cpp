@@ -881,6 +881,28 @@ namespace config {
     return profile;
   }
 
+  std::optional<video_t> video_for_session(const video_t &video_config, const bool second_monitor_session) {
+    if (!second_monitor_session) {
+      return video_config;
+    }
+
+    if (video_config.second_monitor_profile_invalid || !video_config.second_monitor.enabled()) {
+      return std::nullopt;
+    }
+
+    auto session_config {video_config};
+    session_config.output_name = video_config.second_monitor.device_id;
+    session_config.capture = video_config.second_monitor.capture_backend;
+    session_config.dd.configuration_option = video_config.second_monitor.display_policy;
+    session_config.dd.resolution_option = video_t::dd_t::resolution_option_e::manual;
+    session_config.dd.manual_resolution = video_config.second_monitor.resolution;
+    session_config.dd.refresh_rate_option = video_t::dd_t::refresh_rate_option_e::manual;
+    session_config.dd.manual_refresh_rate = std::to_string(video_config.second_monitor.fps);
+    session_config.dd.hdr_option = video_config.second_monitor.hdr ? video_t::dd_t::hdr_option_e::automatic : video_t::dd_t::hdr_option_e::disabled;
+    session_config.dd.config_revert_on_disconnect = video_config.second_monitor.restore_on_disconnect;
+    return session_config;
+  }
+
   /**
    * @brief Default video configuration values used before file and CLI overrides.
    */
@@ -964,6 +986,7 @@ namespace config {
     },  // display_device
 
     {},  // second_monitor
+    false,  // second_monitor_profile_invalid
 
     0,  // max_bitrate
     0  // minimum_fps_target (0 = framerate)
@@ -1755,8 +1778,10 @@ namespace config {
 
     if (const auto profile {parse_second_monitor_profile(vars)}; profile) {
       video.second_monitor = *profile;
+      video.second_monitor_profile_invalid = false;
     } else {
       video.second_monitor = video_t::second_monitor_t {};
+      video.second_monitor_profile_invalid = true;
     }
     erase_second_monitor_keys(vars);
 
@@ -1869,19 +1894,6 @@ namespace config {
       video.dd.wa.hdr_toggle_delay = std::chrono::milliseconds {value};
     }
 
-    if (video.second_monitor.enabled()) {
-      video.output_name = video.second_monitor.device_id;
-      video.capture = video.second_monitor.capture_backend;
-      video.dd.configuration_option = video.second_monitor.display_policy;
-      video.dd.resolution_option = video_t::dd_t::resolution_option_e::manual;
-      video.dd.manual_resolution = video.second_monitor.resolution;
-      video.dd.refresh_rate_option = video_t::dd_t::refresh_rate_option_e::manual;
-      video.dd.manual_refresh_rate = std::to_string(video.second_monitor.fps);
-      video.dd.hdr_option = video.second_monitor.hdr ? video_t::dd_t::hdr_option_e::automatic : video_t::dd_t::hdr_option_e::disabled;
-      video.dd.config_revert_on_disconnect = video.second_monitor.restore_on_disconnect;
-      audio.stream = video.second_monitor.stream_audio;
-    }
-
     int_f(vars, "max_bitrate", video.max_bitrate);
     double_between_f(vars, "minimum_fps_target", video.minimum_fps_target, {0.0, 1000.0});
 
@@ -1902,10 +1914,6 @@ namespace config {
     string_f(vars, "virtual_sink", audio.virtual_sink);
     bool_f(vars, "stream_audio", audio.stream);
     bool_f(vars, "install_steam_audio_drivers", audio.install_steam_drivers);
-    if (video.second_monitor.enabled()) {
-      audio.stream = video.second_monitor.stream_audio;
-    }
-
     string_restricted_f(vars, "origin_web_ui_allowed", nvhttp.origin_web_ui_allowed, {"pc"sv, "lan"sv, "wan"sv});
 
     // Parse CSRF allowed origins - always include defaults, then append user-configured origins
