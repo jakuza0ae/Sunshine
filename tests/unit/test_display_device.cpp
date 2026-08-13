@@ -7,6 +7,7 @@
 #include <format>
 #include <initializer_list>
 #include <src/config.h>
+#include <src/confighttp.h>
 #include <src/display_device.h>
 #include <src/rtsp.h>
 
@@ -347,7 +348,7 @@ TEST(SecondMonitorLifecycle, FailedPendingLaunchDoesNotRestoreAnotherOwner) {
   display_device::second_monitor_lifecycle_t lifecycle;
 
   lifecycle.capture_started("{vdd-guid}", "\\\\.\\DISPLAY2", "ddx", "h264_amf", 1280, 720, 30);
-  lifecycle.session_started();
+  lifecycle.session_started("h264", 5000);
 
   EXPECT_FALSE(lifecycle.launch_failed(true));
   EXPECT_EQ(lifecycle.status().state, "capturing");
@@ -358,8 +359,8 @@ TEST(SecondMonitorLifecycle, FinalOwnerRestoresAfterSharedSessionsEnd) {
   display_device::second_monitor_lifecycle_t lifecycle;
 
   lifecycle.capture_started("{vdd-guid}", "\\\\.\\DISPLAY2", "ddx", "h264_amf", 1280, 720, 30);
-  lifecycle.session_started();
-  lifecycle.session_started();
+  lifecycle.session_started("h264", 5000);
+  lifecycle.session_started("h264", 5000);
 
   EXPECT_FALSE(lifecycle.session_stopped(true));
   EXPECT_EQ(lifecycle.status().state, "capturing");
@@ -380,6 +381,54 @@ TEST(SecondMonitorLifecycle, CaptureReinitializationKeepsReasonInDiagnostics) {
 
   lifecycle.capture_reinitialized();
   EXPECT_EQ(lifecycle.status().state, "capturing");
+}
+
+TEST(SecondMonitorDiagnostics, SerializesTheDiagnosticRecordWithoutSecretsOrCommands) {
+  display_device::second_monitor_status_t status {
+    .state = "capturing",
+    .selected_device_id = "{vdd-guid}",
+    .host_display_id = "{vdd-guid}",
+    .mapped_output = "\\\\.\\DISPLAY2",
+    .friendly_name = "Virtual Display",
+    .active = true,
+    .virtual_device = true,
+    .current_width = 1280,
+    .current_height = 720,
+    .capture_backend = "ddx",
+    .encoder = "h264_nvenc",
+    .codec = "h264",
+    .active_width = 1280,
+    .active_height = 720,
+    .active_fps = 30,
+    .bitrate_kbps = 5000,
+    .rtt_ms = 22,
+    .dropped_frames = 3,
+    .reconnect_count = 1,
+    .last_error = "password=not-a-diagnostic-value",
+    .last_reinitialization_reason = "whoami --pairing-key=not-a-diagnostic-value"
+  };
+
+  const auto json {confighttp::serialize_second_monitor_status(status)};
+  const auto serialized {json.dump()};
+
+  EXPECT_EQ(json.at("state").get<std::string>(), "capturing");
+  EXPECT_EQ(json.at("host_display_id").get<std::string>(), "{vdd-guid}");
+  EXPECT_EQ(json.at("mapped_output").get<std::string>(), "\\\\.\\DISPLAY2");
+  EXPECT_EQ(json.at("capture_backend").get<std::string>(), "ddx");
+  EXPECT_EQ(json.at("encoder").get<std::string>(), "h264_nvenc");
+  EXPECT_EQ(json.at("codec").get<std::string>(), "h264");
+  EXPECT_EQ(json.at("resolution").get<std::string>(), "1280x720");
+  EXPECT_EQ(json.at("fps").get<unsigned int>(), 30);
+  EXPECT_EQ(json.at("bitrate_kbps").get<unsigned int>(), 5000);
+  EXPECT_EQ(json.at("rtt_ms").get<unsigned int>(), 22);
+  EXPECT_EQ(json.at("dropped_frames").get<unsigned int>(), 3);
+  EXPECT_EQ(json.at("reconnect_count").get<unsigned int>(), 1);
+  EXPECT_EQ(json.at("last_error").get<std::string>(), "redacted");
+  EXPECT_EQ(json.at("last_reinitialization_reason").get<std::string>(), "redacted");
+  EXPECT_EQ(serialized.find("not-a-diagnostic-value"), std::string::npos);
+  EXPECT_EQ(serialized.find("whoami"), std::string::npos);
+  EXPECT_EQ(serialized.find("pairing-key"), std::string::npos);
+  EXPECT_EQ(serialized.find("password"), std::string::npos);
 }
 
 TEST(DisplayDeviceClassification, UsesVirtualIdentitySignalsAndUnknownWhenMetadataIsInsufficient) {

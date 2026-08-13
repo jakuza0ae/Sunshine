@@ -808,27 +808,32 @@ namespace display_device {
     m_restore_request_pending = false;
     m_state = vdd_available ? second_monitor_state_e::display_configuring : second_monitor_state_e::waiting_for_vdd;
     m_status.state = std::string {second_monitor_state_name(m_state)};
+    m_status.last_error = vdd_available ? "" : "vdd_unavailable";
   }
 
   void second_monitor_lifecycle_t::retry(const bool vdd_available) {
     m_state = vdd_available ? second_monitor_state_e::display_configuring : second_monitor_state_e::waiting_for_vdd;
     m_status.state = std::string {second_monitor_state_name(m_state)};
+    m_status.last_error = vdd_available ? "" : "vdd_unavailable";
   }
 
   void second_monitor_lifecycle_t::capture_started(std::string selected_device_id, std::string mapped_output, std::string capture_backend, std::string encoder, const unsigned int width, const unsigned int height, const unsigned int fps) {
     m_status.selected_device_id = std::move(selected_device_id);
+    m_status.host_display_id = m_status.selected_device_id;
     m_status.mapped_output = std::move(mapped_output);
     m_status.capture_backend = std::move(capture_backend);
     m_status.encoder = std::move(encoder);
     m_status.active_width = width;
     m_status.active_height = height;
     m_status.active_fps = fps;
+    m_status.last_error.clear();
     m_state = second_monitor_state_e::capturing;
     m_status.state = std::string {second_monitor_state_name(m_state)};
   }
 
   void second_monitor_lifecycle_t::capture_reinitializing(std::string reason) {
     m_status.last_reinitialization_reason = std::move(reason);
+    m_status.last_error = "capture_reinitializing";
     m_state = second_monitor_state_e::capture_reinitializing;
     m_status.state = std::string {second_monitor_state_name(m_state)};
   }
@@ -838,8 +843,10 @@ namespace display_device {
     m_status.state = std::string {second_monitor_state_name(m_state)};
   }
 
-  void second_monitor_lifecycle_t::session_started() {
+  void second_monitor_lifecycle_t::session_started(std::string codec, const unsigned int bitrate_kbps) {
     ++m_session_owners;
+    m_status.codec = std::move(codec);
+    m_status.bitrate_kbps = bitrate_kbps;
     m_state = second_monitor_state_e::capturing;
     m_status.state = std::string {second_monitor_state_name(m_state)};
   }
@@ -868,6 +875,7 @@ namespace display_device {
 
     m_restore_scheduled = true;
     m_restore_request_pending = true;
+    m_status.last_error = "launch_failed";
     m_state = second_monitor_state_e::display_restore_pending;
     m_status.state = std::string {second_monitor_state_name(m_state)};
     return true;
@@ -884,6 +892,7 @@ namespace display_device {
 
   void second_monitor_lifecycle_t::restore_finished(const bool success) {
     m_restore_request_pending = false;
+    m_status.last_error = success ? "" : "restore_failed";
     m_state = success ? second_monitor_state_e::waiting_for_vdd : second_monitor_state_e::display_restore_failed;
     m_status.state = std::string {second_monitor_state_name(m_state)};
   }
@@ -922,6 +931,7 @@ namespace display_device {
     }
 
     status.selected_device_id = config::video.second_monitor.device_id;
+    status.host_display_id = status.selected_device_id;
     status.capture_backend = config::video.second_monitor.capture_backend;
 
     const auto selection {resolve_display_selection(config::video, devices)};
@@ -981,11 +991,11 @@ namespace display_device {
     }
   }
 
-  void mark_session_started() {
+  void mark_session_started(std::string codec, const unsigned int bitrate_kbps) {
     std::lock_guard lock {DD_DATA.mutex};
     std::lock_guard lifecycle_lock {DD_DATA.lifecycle_mutex};
     if (config::video.second_monitor.enabled()) {
-      DD_DATA.lifecycle.session_started();
+      DD_DATA.lifecycle.session_started(std::move(codec), bitrate_kbps);
     }
   }
 

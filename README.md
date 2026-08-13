@@ -35,6 +35,22 @@ LizardByte has the full documentation hosted on [Read the Docs](https://docs.liz
 * [Stable Docs](https://docs.lizardbyte.dev/projects/sunshine/latest/)
 * [Beta Docs](https://docs.lizardbyte.dev/projects/sunshine/master/)
 
+## Second-Monitor Validation
+
+The second-monitor profile configures an existing virtual display only. Select the stable VDD device ID and use the `vdd_only` policy; do not configure a physical output as a fallback. A minimal starting profile is:
+
+```ini
+second_monitor_device_id={your-vdd-device-id}
+second_monitor_resolution=1280x720
+second_monitor_fps=30
+second_monitor_display_policy=vdd_only
+second_monitor_restore_on_disconnect=true
+```
+
+The authenticated `GET /api/second-monitor/status` endpoint reports lifecycle state, host display identity, mapped output, capture backend, encoder, codec, stream metrics, and restore errors without returning credentials or command content. Use `docs/superpowers/validation/second-monitor-test-matrix.md` in the Moonlight checkout for the complete VDD, touch, network, restore, and no-fallback matrix.
+
+Host-side C++ tests and live Windows VDD/hotplug checks require the documented MSYS2 toolchain and a target Windows session. If those prerequisites are unavailable, record the check as `BLOCKED/NOT RUN`; this checkout does not claim those checks pass.
+
 ## 🎮 Feature Compatibility
 
 <table>

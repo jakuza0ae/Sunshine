@@ -75,6 +75,7 @@ namespace display_device {
   struct second_monitor_status_t {
     std::string state {"waiting_for_vdd"};  ///< Current second-monitor lifecycle state.
     std::string selected_device_id {};  ///< Stable VDD device ID selected by the profile.
+    std::string host_display_id {};  ///< Stable host display ID used by the diagnostic record.
     std::string mapped_output {};  ///< Current platform output name for the selected VDD.
     std::string friendly_name {};  ///< Human-readable name of the selected device.
     bool active {};  ///< Whether the selected device is currently enumerated.
@@ -83,9 +84,15 @@ namespace display_device {
     unsigned int current_height {};  ///< Current enumerated device height in pixels.
     std::string capture_backend {};  ///< Capture backend selected for the active profile.
     std::string encoder {};  ///< Encoder selected by the most recent probe.
+    std::string codec {};  ///< Codec negotiated for the active stream.
     unsigned int active_width {};  ///< Active profile width in pixels.
     unsigned int active_height {};  ///< Active profile height in pixels.
     unsigned int active_fps {};  ///< Active profile frame rate.
+    unsigned int bitrate_kbps {};  ///< Negotiated video bitrate in kilobits per second.
+    std::optional<unsigned int> rtt_ms {};  ///< Round-trip time in milliseconds when available.
+    std::optional<unsigned int> dropped_frames {};  ///< Dropped frame count when available.
+    unsigned int reconnect_count {};  ///< Number of reconnects reported by the diagnostic source.
+    std::string last_error {};  ///< Last bounded lifecycle error name.
     std::string last_reinitialization_reason {};  ///< Last bounded reason for capture reinitialization.
     std::vector<second_monitor_device_status_t> devices {};  ///< Enumerated display choices for the selector.
   };
@@ -100,7 +107,7 @@ namespace display_device {
     void capture_started(std::string selected_device_id, std::string mapped_output, std::string capture_backend, std::string encoder, unsigned int width, unsigned int height, unsigned int fps);
     void capture_reinitializing(std::string reason);
     void capture_reinitialized();
-    void session_started();
+    void session_started(std::string codec, unsigned int bitrate_kbps);
     [[nodiscard]] bool session_stopped(bool restore_enabled);
     [[nodiscard]] bool launch_failed(bool restore_enabled);
     [[nodiscard]] bool consume_restore_request();
@@ -138,7 +145,7 @@ namespace display_device {
   /**
    * @brief Record a successfully owned stream session.
    */
-  void mark_session_started();
+  void mark_session_started(std::string codec, unsigned int bitrate_kbps);
 
   /**
    * @brief Record a stopped stream and return whether final restore should run.

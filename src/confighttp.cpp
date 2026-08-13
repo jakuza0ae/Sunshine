@@ -8,6 +8,7 @@
 
 // standard includes
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -72,6 +73,27 @@ namespace confighttp {
    * @brief Handler signature for configuration UI HTTPS routes.
    */
   using https_handler_t = std::function<void(resp_https_t, req_https_t)>;
+
+  /**
+   * @brief Replace diagnostic text that did not come from a bounded lifecycle vocabulary.
+   * @param value Candidate diagnostic text.
+   * @return The original known-safe value or a redaction marker.
+   */
+  std::string safe_second_monitor_diagnostic_text(const std::string_view value) {
+    constexpr std::array<std::string_view, 7> safe_values {
+      "",
+      "vdd_unavailable",
+      "capture_reinitializing",
+      "launch_failed",
+      "restore_failed",
+      "VDD hotplug",
+      "capture backend requested reinitialization"
+    };
+    if (std::find(std::begin(safe_values), std::end(safe_values), value) != std::end(safe_values)) {
+      return std::string {value};
+    }
+    return "redacted";
+  }
 
   /**
    * @brief Client certificate operations accepted by the configuration API.
@@ -1028,6 +1050,49 @@ namespace confighttp {
     send_response(response, output_tree);
   }
 
+  nlohmann::json serialize_second_monitor_status(const display_device::second_monitor_status_t &status) {
+    const auto optional_uint_json = [](const std::optional<unsigned int> value) {
+      return value ? nlohmann::json {*value} : nlohmann::json {nullptr};
+    };
+    const auto virtual_device_json = [](const std::optional<bool> value) {
+      return value ? nlohmann::json {*value} : nlohmann::json {nullptr};
+    };
+    nlohmann::json devices = nlohmann::json::array();
+    for (const auto &device : status.devices) {
+      devices.push_back({
+        {"device_id", device.device_id},
+        {"display_name", device.display_name},
+        {"friendly_name", device.friendly_name},
+        {"active", device.active},
+        {"virtual_device", virtual_device_json(device.virtual_device)},
+        {"current_resolution", std::format("{}x{}", device.current_width, device.current_height)}
+      });
+    }
+
+    return {
+      {"state", status.state},
+      {"selected_device_id", status.selected_device_id},
+      {"host_display_id", status.host_display_id.empty() ? status.selected_device_id : status.host_display_id},
+      {"mapped_output", status.mapped_output},
+      {"friendly_name", status.friendly_name},
+      {"active", status.active},
+      {"virtual_device", virtual_device_json(status.virtual_device)},
+      {"current_resolution", std::format("{}x{}", status.current_width, status.current_height)},
+      {"devices", std::move(devices)},
+      {"capture_backend", status.capture_backend},
+      {"encoder", status.encoder},
+      {"codec", status.codec},
+      {"resolution", std::format("{}x{}", status.active_width, status.active_height)},
+      {"fps", status.active_fps},
+      {"bitrate_kbps", status.bitrate_kbps},
+      {"rtt_ms", optional_uint_json(status.rtt_ms)},
+      {"dropped_frames", optional_uint_json(status.dropped_frames)},
+      {"reconnect_count", status.reconnect_count},
+      {"last_error", safe_second_monitor_diagnostic_text(status.last_error)},
+      {"last_reinitialization_reason", safe_second_monitor_diagnostic_text(status.last_reinitialization_reason)}
+    };
+  }
+
   /**
    * @brief Get the current second-monitor lifecycle and display mapping.
    * @param response HTTP response object to populate.
@@ -1043,35 +1108,7 @@ namespace confighttp {
     print_req(request);
 
     const auto status {display_device::second_monitor_status()};
-    const auto virtual_device_json = [](const std::optional<bool> value) {
-      return value ? nlohmann::json {*value} : nlohmann::json {nullptr};
-    };
-    nlohmann::json devices = nlohmann::json::array();
-    for (const auto &device : status.devices) {
-      devices.push_back({
-        {"device_id", device.device_id},
-        {"display_name", device.display_name},
-        {"friendly_name", device.friendly_name},
-        {"active", device.active},
-        {"virtual_device", virtual_device_json(device.virtual_device)},
-        {"current_resolution", std::format("{}x{}", device.current_width, device.current_height)}
-      });
-    }
-    nlohmann::json output_tree {
-      {"state", status.state},
-      {"selected_device_id", status.selected_device_id},
-      {"mapped_output", status.mapped_output},
-      {"friendly_name", status.friendly_name},
-      {"active", status.active},
-      {"virtual_device", virtual_device_json(status.virtual_device)},
-      {"current_resolution", std::format("{}x{}", status.current_width, status.current_height)},
-      {"devices", std::move(devices)},
-      {"capture_backend", status.capture_backend},
-      {"encoder", status.encoder},
-      {"resolution", std::format("{}x{}", status.active_width, status.active_height)},
-      {"fps", status.active_fps},
-      {"last_reinitialization_reason", status.last_reinitialization_reason}
-    };
+    nlohmann::json output_tree {serialize_second_monitor_status(status)};
     output_tree["status"] = true;
     send_response(response, output_tree);
   }

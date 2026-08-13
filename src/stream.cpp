@@ -2250,7 +2250,10 @@ namespace stream {
 #endif
       }
 
-      display_device::mark_session_started();
+      const auto codec {
+        session->config.monitor.videoFormat == 1 ? "hevc" : session->config.monitor.videoFormat == 2 ? "av1" : "h264"
+      };
+      display_device::mark_session_started(codec, static_cast<unsigned int>(std::max(0, session->config.monitor.bitrate)));
 
       return 0;
     }

@@ -16,6 +16,10 @@
 // local includes
 #include "thread_safe.h"
 
+namespace display_device {
+  struct second_monitor_status_t;
+}
+
 /**
  * @def WEB_DIR
  * @brief Macro for WEB DIR.
@@ -74,6 +78,13 @@ namespace confighttp {
   void browseDirectory(const resp_https_t &response, const req_https_t &request);
   void getLocale(const resp_https_t &response, const req_https_t &request);
   void getCSRFToken(const resp_https_t &response, const req_https_t &request);
+
+  /**
+   * @brief Serialize the allowlisted second-monitor diagnostic record.
+   * @param status Secret-free lifecycle and display status to serialize.
+   * @return JSON containing only diagnostic fields safe for the authenticated endpoint.
+   */
+  nlohmann::json serialize_second_monitor_status(const display_device::second_monitor_status_t &status);
 
   // Browse helper functions (also exposed for unit testing)
   /**
