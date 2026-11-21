@@ -4,7 +4,7 @@ StreamDesk extends a KDE desktop onto an iPad using a dedicated 1440×1080 virtu
 
 ## Install a prebuilt package
 
-The Arch/CachyOS x86-64 package has a userspace installer. Unpack and install it in one shell command.
+The x86-64 package was built and tested on CachyOS with glibc 2.44 and OpenSSL 4. Its installer checks the Linux runtime libraries. Unpack and install it in one shell command.
 
 ```sh
 tar -xzf StreamDesk-Host-linux-x86_64.tar.gz && bash StreamDesk-Host/install.sh

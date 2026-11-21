@@ -20,7 +20,7 @@ if [[ -d "$files/payload" ]]; then
         printf 'This package requires %s\n' "$(cat "$files/build-architecture")" >&2
         exit 1
     }
-    programs+=(sha256sum)
+    programs+=(sha256sum ldd)
 else
     src=$(cd "$files/../../.." && pwd)
     revision=$(git -C "$src" rev-parse --short=16 HEAD)
@@ -43,6 +43,12 @@ if [[ ! -x "$target/bin/sunshine" ]]; then
     trap 'python3 -c "import shutil,sys; shutil.rmtree(sys.argv[1])" "$staging"' EXIT
     if (( prebuilt )); then
         (cd "$files" && sha256sum --quiet --strict -c payload.sha256)
+        if ! dependencies=$(LC_ALL=C ldd "$files/payload/bin/sunshine" 2>&1) ||
+            [[ "$dependencies" == *"not found"* ]]; then
+            printf '%s\n' 'The binary needs Linux libraries unavailable on this system. Use the source installer.' >&2
+            printf '%s\n' "$dependencies" | awk '/not found/' >&2
+            exit 1
+        fi
         cp -a "$files/payload" "$staging/usr"
     else
         git -C "$src" submodule update --init --depth 1 \

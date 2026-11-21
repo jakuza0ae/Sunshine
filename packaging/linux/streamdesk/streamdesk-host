@@ -11,6 +11,7 @@ case "${1:-run}" in
         ;;
     version)
         cd "$(readlink -f "$data/current")"
+        printf 'StreamDesk package revision: %s\n' "${PWD##*/}"
         XDG_CONFIG_HOME="$config" exec "$PWD/bin/sunshine" "$config/sunshine/sunshine.conf" --version
         ;;
     display)
