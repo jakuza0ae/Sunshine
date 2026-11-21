@@ -10,7 +10,7 @@ revision=${commit:0:16}
 [[ -x "$root/bin/sunshine" && -f "$root/share/streamdesk/web/index.html" ]]
 scratch=$(mktemp -d)
 trap 'python3 -c "import shutil,sys; shutil.rmtree(sys.argv[1])" "$scratch"' EXIT
-if ! build_info=$(XDG_CONFIG_HOME="$scratch/config" timeout 5s "$root/bin/sunshine" --version 2>&1) ||
+if ! build_info=$(cd "$root" && XDG_CONFIG_HOME="$scratch/config" timeout 5s bin/sunshine --version 2>&1) ||
     [[ "$build_info"$'\n' != *" commit: $commit"$'\n'* || "$build_info" == *"-dirty commit: $commit"* ]]; then
     printf 'Expected a clean Sunshine build from commit %s. Reconfigure and rebuild before packaging.\n' "$commit" >&2
     exit 1

@@ -39,7 +39,8 @@ archive="$scratch/StreamDesk.tar.gz"
 mkdir -p "$stage/bin" "$stage/share/streamdesk/web"
 touch "$stage/share/streamdesk/web/index.html"
 write_version() {
-    printf '#!/bin/sh\nprintf "%%s\\n" "Sunshine version: %s commit: %s"\n' "$1" "$2" > "$stage/bin/sunshine"
+    printf '#!/bin/sh\ntest -f share/streamdesk/web/index.html || exit 1\nprintf "%%s\\n" "Sunshine version: %s commit: %s"\n' \
+        "$1" "$2" > "$stage/bin/sunshine"
     chmod +x "$stage/bin/sunshine"
 }
 expect_rejected() {
