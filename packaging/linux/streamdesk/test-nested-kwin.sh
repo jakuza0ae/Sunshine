@@ -7,10 +7,15 @@ prefix=$(cd "$1" && pwd)
 script_dir=$(cd "$(dirname "$0")" && pwd)
 client=${STREAMDESK_PROBE_CLIENT:-}
 animated=${STREAMDESK_TEST_ANIMATED:-0}
+desktop_pairing=${STREAMDESK_TEST_KDE_PAIRING:-0}
 command -v wireplumber >/dev/null || { echo "The isolated test requires WirePlumber 0.5 or newer" >&2; exit 2; }
 if [[ "$animated" == 1 ]]; then
     [[ -n "$client" ]] || { echo "The animated test requires STREAMDESK_PROBE_CLIENT" >&2; exit 2; }
     command -v ffmpeg >/dev/null
+fi
+if [[ "$desktop_pairing" == 1 ]]; then
+    [[ -n "$client" ]] || { echo "The KDE pairing test requires STREAMDESK_PROBE_CLIENT" >&2; exit 2; }
+    python3 -c 'from gi.repository import Gio' || exit 2
 fi
 test_timeout=55
 if [[ -n "$client" ]]; then
@@ -134,7 +139,16 @@ if [[ -n "$client" ]]; then
     printf 'file_apps = %s\n' "$scratch/apps.json" >> "$scratch/pass.conf"
     ./bin/sunshine "$scratch/pass.conf" --creds streamdesk-test isolated-test-password >"$scratch/setup.log" 2>&1
 fi
-./bin/sunshine "$scratch/pass.conf" >"$scratch/found.log" 2>&1 &
+if [[ "$desktop_pairing" == 1 ]]; then
+    python3 "$script_dir/test-notification-pairing.py" "$scratch" >"$scratch/notification.log" 2>&1 &
+    pids+=("$!")
+    for ((n=0; n<35; n++)); do
+        [[ -f "$scratch/notification-ready" ]] && break
+        sleep .1
+    done
+    [[ -f "$scratch/notification-ready" ]]
+fi
+STREAMDESK_KDE_PAIRING="$desktop_pairing" ./bin/sunshine "$scratch/pass.conf" >"$scratch/found.log" 2>&1 &
 pids+=("$!")
 for ((n=0; n<115; n++)); do
     if grep -q "Found H.264 encoder" "$scratch/found.log" && curl --noproxy '*' --max-time 1 -fsS http://127.0.0.1:48289/serverinfo >"$scratch/serverinfo.xml" 2>/dev/null; then break; fi
@@ -151,16 +165,25 @@ if [[ -n "$client" ]]; then
     HOME="$scratch/client-home" "$client" pair -pin 4321 -keydir "$keydir" -port 48289 127.0.0.1 >"$scratch/pair.log" 2>&1 &
     pair=$!
     pids+=("$pair")
-    api=(curl --noproxy '*' -kfsS --max-time 2 -u streamdesk-test:isolated-test-password)
-    pairid=""
-    for ((n=0; n<35; n++)); do
-        pairid=$("${api[@]}" https://127.0.0.1:48290/api/pin | jq -r '.pairings[0].id // empty')
-        [[ -n "$pairid" ]] && break
-        sleep .2
-    done
-    [[ "$pairid" =~ ^[0-9a-f]{32}$ ]]
-    jq -nc --arg id "$pairid" '{pairing_id:$id,pin:"4321",name:"Headless regression"}' |
-        "${api[@]}" -H 'Content-Type: application/json' --data-binary @- https://127.0.0.1:48290/api/pin | jq -e '.status' >/dev/null
+    if [[ "$desktop_pairing" == 1 ]]; then
+        for ((n=0; n<50; n++)); do
+            [[ -f "$scratch/notification-accepted" ]] && break
+            sleep .2
+        done
+        [[ -f "$scratch/notification-accepted" ]]
+        printf 'Verified inline pairing notification, ignored wrong ID, and retried invalid PIN input\n'
+    else
+        api=(curl --noproxy '*' -kfsS --max-time 2 -u streamdesk-test:isolated-test-password)
+        pairid=""
+        for ((n=0; n<35; n++)); do
+            pairid=$("${api[@]}" https://127.0.0.1:48290/api/pin | jq -r '.pairings[0].id // empty')
+            [[ -n "$pairid" ]] && break
+            sleep .2
+        done
+        [[ "$pairid" =~ ^[0-9a-f]{32}$ ]]
+        jq -nc --arg id "$pairid" '{pairing_id:$id,pin:"4321",name:"Headless regression"}' |
+            "${api[@]}" -H 'Content-Type: application/json' --data-binary @- https://127.0.0.1:48290/api/pin | jq -e '.status' >/dev/null
+    fi
     wait "$pair"
     unset 'pids[-1]'
 

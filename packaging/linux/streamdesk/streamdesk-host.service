@@ -6,4 +6,5 @@ PartOf=graphical-session.target
 
 [Service]
 Type=exec
+Environment=STREAMDESK_KDE_PAIRING=1
 ExecStart=%h/.local/bin/streamdesk-host run

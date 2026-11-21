@@ -41,7 +41,7 @@ The installer selects the new release after validating its desktop entry and rel
 ~/.local/bin/streamdesk-host doctor
 ```
 
-Open `https://localhost:48190` on the Linux host to initialize or administer this instance. In StreamDesk on the iPad, add the host as `LAN-IP:48189`, pair and choose **StreamDesk Display**. The built-in client profile initially requests H.264, 1280×960, 30 FPS and 6 Mb/s. The second-display settings also offer 1024×768 and 1440×1080.
+Open `https://localhost:48190` on the Linux host to initialize or administer this instance. In StreamDesk on the iPad, add the host as `LAN-IP:48189`. When the iPad shows its PIN, select **Enter PIN** in the KDE notification and enter the four digits. The web panel at `https://localhost:48190/pin` also supports pairing. Then choose **StreamDesk Display**. The built-in client profile initially requests H.264, 1280×960, 30 FPS and 6 Mb/s. The second-display settings also offer 1024×768 and 1440×1080.
 
 New installations leave audio on the computer. To use the same default with a previously installed host, set `stream_audio = disabled` in its StreamDesk Sunshine configuration. The installer preserves existing settings and paired devices.
 
@@ -60,6 +60,8 @@ The command below stops the StreamDesk host and releases its virtual display.
 ## Isolated streaming regression
 
 The capture smoke test runs on loopback in its own network, D-Bus and KDE session. It uses a private WirePlumber 0.5 policy session to link the capture node, with no device monitors.
+
+With the headless client and PyGObject available, set `STREAMDESK_TEST_KDE_PAIRING=1` to pair through a simulated notification server. This checks the reply field, rejection of an unrelated notification ID and retry after malformed input before the streaming checks.
 
 ```sh
 packaging/linux/streamdesk/test-nested-kwin.sh "$HOME/.local/share/streamdesk-host/current"

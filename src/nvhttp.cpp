@@ -8,6 +8,7 @@
 // standard includes
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <format>
 #include <mutex>
@@ -38,6 +39,9 @@
 #include "utility.h"
 #include "uuid.h"
 #include "video.h"
+#ifdef __linux__
+  #include "platform/linux/pairing_notifications.h"
+#endif
 
 using namespace std::literals;
 
@@ -1683,12 +1687,25 @@ namespace nvhttp {
         return;
       }
     };
+#ifdef __linux__
+    std::jthread pairing_notifications;
+    const char *desktop_pairing = std::getenv("STREAMDESK_KDE_PAIRING");
+    if (desktop_pairing && std::string_view {desktop_pairing} == "1") {
+      pairing_notifications = std::jthread(platf::run_pairing_notifications);
+    }
+#endif
     std::jthread ssl {accept_and_run, &https_server};
     std::jthread tcp {accept_and_run, &http_server};
 
     // Wait for any event
     shutdown_event->view();
 
+#ifdef __linux__
+    if (pairing_notifications.joinable()) {
+      pairing_notifications.request_stop();
+      pairing_notifications.join();
+    }
+#endif
     https_server.stop();
     http_server.stop();
 
