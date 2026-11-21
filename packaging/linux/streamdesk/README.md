@@ -30,6 +30,8 @@ git clone --depth 1 --branch linux-streamdesk https://github.com/jakuza0ae/Sunsh
 
 The installer compiles and stages a revision under `${XDG_DATA_HOME:-$HOME/.local/share}/streamdesk-host/releases`. Reinstalling the same revision reuses the binary and preserves configuration and pairing. Installation leaves existing sessions running. It does not enable any service at login.
 
+The installer selects the new release after validating its desktop entry and reloading the user systemd configuration. If applying the update fails, it restores the previous launcher and services.
+
 ## Start and connect
 
 ```sh

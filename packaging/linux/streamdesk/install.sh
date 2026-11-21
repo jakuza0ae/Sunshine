@@ -36,11 +36,39 @@ install -d "$data/releases"
 exec 9>"$data/install.lock"
 flock -n 9 || { printf '%s\n' 'StreamDesk installation is already running' >&2; exit 1; }
 
+staging=$(mktemp -d "$data/staging.XXXXXXXX")
+managed=()
+publishing=0
+cleanup() {
+    local status=$? index destination backup
+    trap - EXIT
+    trap '' INT TERM
+    if (( publishing )); then
+        printf '%s\n' 'Restoring the previous StreamDesk installation' >&2
+        for index in "${!managed[@]}"; do
+            destination=${managed[index]}
+            backup="$staging/backup/$index"
+            if [[ -e "$backup" || -L "$backup" ]]; then
+                cp -aT --remove-destination "$backup" "$destination" ||
+                    printf 'Could not restore %s\n' "$destination" >&2
+            elif [[ -e "$destination" || -L "$destination" ]]; then
+                unlink "$destination" || printf 'Could not remove %s\n' "$destination" >&2
+            fi
+        done
+        systemctl --user daemon-reload ||
+            printf '%s\n' 'Could not reload systemd after restoring the files' >&2
+    fi
+    python3 -c 'import shutil,sys; shutil.rmtree(sys.argv[1])' "$staging" ||
+        printf 'Could not clean temporary installation files in %s\n' "$staging" >&2
+    exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 # Keep any running StreamDesk process and its assets on its original release.
 target="$data/releases/$revision"
 if [[ ! -x "$target/bin/sunshine" ]]; then
-    staging=$(mktemp -d "$data/staging.XXXXXXXX")
-    trap 'python3 -c "import shutil,sys; shutil.rmtree(sys.argv[1])" "$staging"' EXIT
     if (( prebuilt )); then
         (cd "$files" && sha256sum --quiet --strict -c payload.sha256)
         if ! dependencies=$(LC_ALL=C ldd "$files/payload/bin/sunshine" 2>&1) ||
@@ -73,8 +101,6 @@ fi
 
 install -d "$HOME/.local/bin" "$config/systemd/user" \
     "$config/streamdesk-host/sunshine" "${XDG_DATA_HOME:-$HOME/.local/share}/applications"
-install -m755 "$files/streamdesk-host" "$HOME/.local/bin/streamdesk-host"
-install -m644 "$files/"*.service "$config/systemd/user/"
 for file in sunshine.conf apps.json; do
     if [[ ! -e "$config/streamdesk-host/sunshine/$file" ]]; then
         install -m600 "$files/$file" "$config/streamdesk-host/sunshine/$file"
@@ -82,7 +108,7 @@ for file in sunshine.conf apps.json; do
 done
 
 permissions="${XDG_DATA_HOME:-$HOME/.local/share}/applications/dev.lizardbyte.app.Sunshine.kwin.streamdesk-$revision.desktop"
-cat > "$permissions" <<DESKTOP
+cat > "$staging/capture.desktop" <<DESKTOP
 [Desktop Entry]
 Type=Application
 Name=StreamDesk capture permission
@@ -90,10 +116,36 @@ Exec="$target/bin/sunshine"
 X-KDE-Wayland-Interfaces=zkde_screencast_unstable_v1
 NoDisplay=true
 DESKTOP
+if command -v desktop-file-validate >/dev/null; then
+    desktop-file-validate "$staging/capture.desktop"
+fi
 
-link="$data/.current.$BASHPID"
-ln -s "$target" "$link"
-mv -Tf "$link" "$data/current"
+launcher="$HOME/.local/bin/streamdesk-host"
+units=("$files/"*.service)
+managed=("$data/current" "$launcher" "$permissions")
+for unit in "${units[@]}"; do
+    managed+=("$config/systemd/user/${unit##*/}")
+done
+install -d "$staging/backup"
+for index in "${!managed[@]}"; do
+    destination=${managed[index]}
+    if [[ -d "$destination" && ! -L "$destination" ]]; then
+        printf 'Expected a file or symlink at %s\n' "$destination" >&2
+        exit 1
+    fi
+    if [[ -e "$destination" || -L "$destination" ]]; then
+        cp -a "$destination" "$staging/backup/$index"
+    fi
+done
+
+ln -s "$target" "$staging/current.next"
+publishing=1
+install -m755 -T "$files/streamdesk-host" "$launcher"
+for unit in "${units[@]}"; do
+    install -m644 -T "$unit" "$config/systemd/user/${unit##*/}"
+done
+install -m644 -T "$staging/capture.desktop" "$permissions"
 systemctl --user daemon-reload
-if command -v desktop-file-validate >/dev/null; then desktop-file-validate "$permissions"; fi
+mv -Tf "$staging/current.next" "$data/current"
+publishing=0
 printf 'Installed %s\nStart when ready with %s/.local/bin/streamdesk-host start\n' "$revision" "$HOME"
