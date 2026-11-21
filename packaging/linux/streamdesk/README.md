@@ -43,7 +43,7 @@ The installer selects the new release after validating its desktop entry and rel
 
 Open `https://localhost:48190` on the Linux host to initialize or administer this instance. In StreamDesk on the iPad, add the host as `LAN-IP:48189`. When the iPad shows its PIN, select **Enter PIN** in the KDE notification and enter the four digits. The web panel at `https://localhost:48190/pin` also supports pairing. Then choose **StreamDesk Display**. The built-in client profile initially requests H.264, 1280×960, 30 FPS and 6 Mb/s. The second-display settings also offer 1024×768 and 1440×1080.
 
-New installations leave audio on the computer. To use the same default with a previously installed host, set `stream_audio = disabled` in its StreamDesk Sunshine configuration. The installer preserves existing settings and paired devices.
+StreamDesk defaults to **Host only**. The client requests video without an audio stream, so Sunshine leaves sound on the computer and reserves no network bandwidth for audio. **Both** and **iPad only** require `stream_audio = enabled` on the host. The installer preserves existing settings and paired devices.
 
 `Virtual-StreamDesk` can be positioned in KDE Display Configuration. The host service waits for it before starting capture. KWin rejects capture if the named output disappears. The KRfb VNC TCP listener is confined to a separate network namespace. KWin permissions are registered for the specific fork binary.
 
@@ -67,7 +67,7 @@ With the headless client and PyGObject available, set `STREAMDESK_TEST_KDE_PAIRI
 packaging/linux/streamdesk/test-nested-kwin.sh "$HOME/.local/share/streamdesk-host/current"
 ```
 
-The optional streaming regression builds [Moonlight Embedded](https://github.com/moonlight-stream/moonlight-embedded/tree/33142e58ebd576085a076f4ce24881d20b3c4ef5) at commit `33142e5` with `moonlight-headless-test.patch` applied. The patch only adds a test renderer that writes received H.264 decode units to a temporary file. No graphics backend is required for this client build.
+The optional streaming regression builds [Moonlight Embedded](https://github.com/moonlight-stream/moonlight-embedded/tree/33142e58ebd576085a076f4ce24881d20b3c4ef5) at commit `33142e5` with `moonlight-headless-test.patch` applied. The patch adds a test renderer that writes received H.264 decode units to a temporary file. Set `STREAMDESK_TEST_VIDEO_ONLY=1` to verify that the patched test client can omit audio for one session while ordinary sessions keep audio enabled. No graphics backend is required for this client build.
 
 ```sh
 git -C /path/to/moonlight-embedded apply --unidiff-zero "$PWD/packaging/linux/streamdesk/moonlight-headless-test.patch"

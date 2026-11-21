@@ -2156,6 +2156,9 @@ namespace stream {
    * @param session Active streaming or pairing session for the request.
    */
   void audioThread(session_t *session) {
+    if (session->config.audio.flags[audio::config_t::DISABLED]) {
+      return;
+    }
     platf::set_thread_name("session::audio");
     auto fg = util::fail_guard([&]() {
       session::stop(*session);

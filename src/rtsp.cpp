@@ -1143,6 +1143,10 @@ namespace rtsp_stream {
 
     std::int64_t configuredBitrateKbps;
     config.audio.flags[audio::config_t::HOST_AUDIO] = session.host_audio;
+    config.audio.flags[audio::config_t::DISABLED] = session.disable_audio;
+    if (session.disable_audio) {
+      BOOST_LOG(info) << "Client requested a video-only session"sv;
+    }
     try {
       config.audio.channels = (int) util::from_view(args.at("x-nv-audio.surround.numChannels"sv));
       config.audio.mask = (int) util::from_view(args.at("x-nv-audio.surround.channelMask"sv));
@@ -1262,7 +1266,7 @@ namespace rtsp_stream {
         configuredBitrateKbps /= 100.f / (100 - config::stream.fec_percentage);
       }
 
-      if (config::audio.stream) {
+      if (config::audio.stream && !session.disable_audio) {
         // Reserve bandwidth for audio packets, capped at 20% of the budget.
         auto audioBitrateAdjustment = (config.audio.flags[audio::config_t::HIGH_QUALITY] ? 256 : 96) * config.audio.channels;
         configuredBitrateKbps -= std::min((std::int64_t) audioBitrateAdjustment, configuredBitrateKbps / 5);

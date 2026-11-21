@@ -34,3 +34,16 @@ index fab3057..e83efd5 100644
 +static DECODER_RENDERER_CALLBACKS probe_decoder = { .setup=probe_setup, .submitDecodeUnit=probe_submit, .cleanup=probe_cleanup, .capabilities=CAPABILITY_DIRECT_SUBMIT };
 @@ -142,0 +165 @@ DECODER_RENDERER_CALLBACKS* platform_get_video(enum platform system) {
 +  case FAKE: return &probe_decoder;
+diff --git a/libgamestream/client.c b/libgamestream/client.c
+index 63e2d55..1f0acba 100644
+--- a/libgamestream/client.c
++++ b/libgamestream/client.c
+@@ -31,0 +32 @@
++#include <stdlib.h>
+@@ -744 +745,2 @@ int gs_start_app(PSERVER_DATA server, STREAM_CONFIGURATION *config, int appId, b
+-  snprintf(url, sizeof(url), "https://%s:%u/%s?uniqueid=%s&uuid=%s&appid=%d&mode=%dx%dx%d&additionalStates=1&sops=%d&rikey=%s&rikeyid=%d&localAudioPlayMode=%d&surroundAudioInfo=%d&remoteControllersBitmap=%d&gcmap=%d%s%s",
++  const char* streamdesk_audio = getenv("STREAMDESK_NO_AUDIO") == NULL ? "" : "&secondMonitor=1&streamDeskAudio=off";
++  snprintf(url, sizeof(url), "https://%s:%u/%s?uniqueid=%s&uuid=%s&appid=%d&mode=%dx%dx%d&additionalStates=1&sops=%d&rikey=%s&rikeyid=%d&localAudioPlayMode=%d&surroundAudioInfo=%d&remoteControllersBitmap=%d&gcmap=%d%s%s%s",
+@@ -747 +749 @@ int gs_start_app(PSERVER_DATA server, STREAM_CONFIGURATION *config, int appId, b
+-           LiGetLaunchUrlQueryParameters());
++           streamdesk_audio, LiGetLaunchUrlQueryParameters());

@@ -8,6 +8,7 @@ script_dir=$(cd "$(dirname "$0")" && pwd)
 client=${STREAMDESK_PROBE_CLIENT:-}
 animated=${STREAMDESK_TEST_ANIMATED:-0}
 desktop_pairing=${STREAMDESK_TEST_KDE_PAIRING:-0}
+video_only=${STREAMDESK_TEST_VIDEO_ONLY:-0}
 command -v wireplumber >/dev/null || { echo "The isolated test requires WirePlumber 0.5 or newer" >&2; exit 2; }
 if [[ "$animated" == 1 ]]; then
     [[ -n "$client" ]] || { echo "The animated test requires STREAMDESK_PROBE_CLIENT" >&2; exit 2; }
@@ -16,6 +17,10 @@ fi
 if [[ "$desktop_pairing" == 1 ]]; then
     [[ -n "$client" ]] || { echo "The KDE pairing test requires STREAMDESK_PROBE_CLIENT" >&2; exit 2; }
     python3 -c 'from gi.repository import Gio' || exit 2
+fi
+if [[ "$video_only" == 1 && -z "$client" ]]; then
+    echo "The video-only test requires STREAMDESK_PROBE_CLIENT" >&2
+    exit 2
 fi
 test_timeout=55
 if [[ -n "$client" ]]; then
@@ -98,6 +103,13 @@ if [[ "$animated" == 1 ]]; then
     grep -q 'Pattern ready Virtual-StreamDesk' "$scratch/pattern.log"
 fi
 
+audio_stream=disabled
+if [[ "$video_only" == 1 ]]; then
+    audio_stream=enabled
+    export STREAMDESK_NO_AUDIO=1
+else
+    unset STREAMDESK_NO_AUDIO
+fi
 cat > "$scratch/base.conf" <<CONF
 bind_address = 127.0.0.1
 upnp = disabled
@@ -106,7 +118,7 @@ sunshine_name = StreamDesk nested probe
 capture = kwin
 encoder = vaapi
 kwin_require_output = enabled
-stream_audio = disabled
+stream_audio = $audio_stream
 fec_percentage = 20
 min_log_level = debug
 controller = disabled
@@ -216,5 +228,22 @@ if [[ -n "$client" ]]; then
                 END {print "Frames with host processing time:", count+0; exit !(count>=30)}' "$scratch/stream-$size.log"
         fi
     done
+
+    if [[ "$video_only" == 1 ]]; then
+        test "$(grep -c 'Client requested a video-only session' "$scratch/found.log")" -eq 3
+        ! grep -q 'Start capturing Audio' "$scratch/found.log"
+
+        unset STREAMDESK_NO_AUDIO
+        status=0
+        STREAMDESK_VIDEO_PROBE="$scratch/video-audio.h264" timeout --signal=INT --kill-after=3s 9s \
+            "$client" stream -verbose -width 1280 -height 960 -fps 30 \
+            -bitrate 6000 -app "StreamDesk Display" -codec h264 -platform fake -viewonly -nosops -quitappafter \
+            -keydir "$keydir" -port 48289 127.0.0.1 >"$scratch/stream-audio.log" 2>&1 || status=$?
+        [[ "$status" == 0 || "$status" == 124 ]]
+        grep -q 'Start capturing Audio' "$scratch/found.log"
+        audio_bitrate=$(awk '/Final adjusted video encoding bitrate is/ {bitrate=$(NF-1)} END {print bitrate}' "$scratch/found.log")
+        [[ "$audio_bitrate" =~ ^[0-9]+$ && "$audio_bitrate" -lt 4320 ]]
+        printf 'Verified video-only sessions skip host audio and ordinary sessions keep it (%s Kbps video)\n' "$audio_bitrate"
+    fi
 fi
 touch "$scratch/success"

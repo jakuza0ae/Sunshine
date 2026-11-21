@@ -61,6 +61,7 @@ namespace audio {
       HOST_AUDIO,  ///< Host audio
       CUSTOM_SURROUND_PARAMS,  ///< Custom surround parameters
       CONTINUOUS_AUDIO,  ///< Continuous audio
+      DISABLED,  ///< Skip all capture and transport for a video-only session.
       MAX_FLAGS  ///< Maximum number of flags
     };
 
