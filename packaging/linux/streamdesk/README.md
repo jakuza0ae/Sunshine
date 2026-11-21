@@ -2,6 +2,16 @@
 
 StreamDesk extends a KDE desktop onto an iPad using a dedicated 1440×1080 virtual output and the Sunshine streaming backend. The build targets Linux. The packaged profile uses a separate user service, settings directory, pairing database and TCP/UDP port family.
 
+## Install a prebuilt package
+
+The Arch/CachyOS x86-64 package has a userspace installer. Unpack and install it in one shell command.
+
+```sh
+tar -xzf StreamDesk-Host-linux-x86_64.tar.gz && bash StreamDesk-Host/install.sh
+```
+
+The package still uses the machine's runtime libraries and KDE tools. It requires no compilation or root access. A source build is available for machines with different dependencies.
+
 ## Install from source
 
 Arch/CachyOS with a C++23 development environment, CMake, Ninja and Node/npm is the primary target. The build requires the usual Sunshine development libraries and KDE's `krfb-virtualmonitor`, `kscreen-doctor`, `bubblewrap` and `jq`. A hardware H.264 encoder and write access to `/dev/uinput` are recommended for remote mouse and keyboard.

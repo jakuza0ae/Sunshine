@@ -27,6 +27,7 @@ trap 'exit 1' TERM INT
 export XDG_RUNTIME_DIR="$scratch/run" XDG_CONFIG_HOME="$scratch/config"
 export XDG_CACHE_HOME="$scratch/cache" XDG_DATA_HOME="$scratch/data"
 export PIPEWIRE_RUNTIME_DIR="$XDG_RUNTIME_DIR"
+export DBUS_SYSTEM_BUS_ADDRESS="unix:path=$scratch/no-system-bus"
 unset DISPLAY WAYLAND_DISPLAY PIPEWIRE_REMOTE
 install -d -m700 "$XDG_RUNTIME_DIR" "$XDG_CONFIG_HOME/sunshine" "$XDG_DATA_HOME/applications"
 cat > "$XDG_DATA_HOME/applications/dev.lizardbyte.app.Sunshine.kwin.test.desktop" <<DESKTOP
@@ -50,13 +51,14 @@ for ((n=0; n<40; n++)); do
     sleep .2
 done
 wayland-info >"$scratch/wayland.log"
-display=$(awk '/^[[:space:]]+name: / { if ($2 ~ /Virtual/) {print $2; exit} }' "$scratch/wayland.log")
+display=$(awk '/^[[:space:]]+name: / { if ($2 ~ /^Virtual-[[:alnum:]-]+$/) {print $2; exit} }' "$scratch/wayland.log")
 [[ -n "$display" ]]
 
 cat > "$scratch/base.conf" <<CONF
 bind_address = 127.0.0.1
 upnp = disabled
 port = 48289
+sunshine_name = StreamDesk nested probe
 capture = kwin
 kwin_require_output = enabled
 stream_audio = disabled
