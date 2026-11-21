@@ -50,3 +50,24 @@ The command below stops the StreamDesk host and releases its virtual display.
 ## Diagnose
 
 `journalctl --user -u streamdesk-host.service -u streamdesk-display.service` shows capture, encoder and display setup. Check `Found H.264 encoder`, `Screencasting output name Virtual-StreamDesk` and the reported capture dimensions. GPU, display scale, Wi-Fi quality and device decoder behavior all affect the stream. Use the iPad toolbar **Stats** and the client's [measurement matrix](https://github.com/jakuza0ae/moonlight-ios/blob/ipad-streamdesk/docs/streamdesk/research.md) to assess latency and dropped frames under a repeatable workload.
+
+## Isolated streaming regression
+
+The capture smoke test runs on loopback in its own network, D-Bus and KDE session.
+
+```sh
+packaging/linux/streamdesk/test-nested-kwin.sh "$HOME/.local/share/streamdesk-host/current"
+```
+
+The optional streaming regression builds [Moonlight Embedded](https://github.com/moonlight-stream/moonlight-embedded/tree/33142e58ebd576085a076f4ce24881d20b3c4ef5) at commit `33142e5` with `moonlight-headless-test.patch` applied. The patch only adds a test renderer that writes received H.264 decode units to a temporary file. No graphics backend is required for this client build.
+
+```sh
+git -C /path/to/moonlight-embedded apply --unidiff-zero "$PWD/packaging/linux/streamdesk/moonlight-headless-test.patch"
+cmake -S /path/to/moonlight-embedded -B /path/to/moonlight-embedded/build \
+  -DENABLE_SDL=OFF -DENABLE_FFMPEG=OFF -DENABLE_X11=OFF -DENABLE_CEC=OFF -DENABLE_PULSE=OFF
+cmake --build /path/to/moonlight-embedded/build
+STREAMDESK_PROBE_CLIENT=/path/to/moonlight-embedded/build/moonlight \
+  packaging/linux/streamdesk/test-nested-kwin.sh "$HOME/.local/share/streamdesk-host/current"
+```
+
+The test performs pairing, launches **StreamDesk Display** and reads at least 30 decodable H.264 frames at the expected dimensions for each 4:3 profile. It uses `ffprobe` for validation. Input is disabled for the test client. Results cover host capture, encoding and transport over loopback. The iPad decoder and the Wi-Fi link need separate validation.
