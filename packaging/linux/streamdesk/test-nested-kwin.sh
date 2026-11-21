@@ -5,8 +5,9 @@ usage='Usage: test-nested-kwin.sh /absolute/path/to/install-root'
 [[ $# == 1 && -x "$1/bin/sunshine" ]] || { printf '%s\n' "$usage" >&2; exit 2; }
 prefix=$(cd "$1" && pwd)
 if [[ ${STREAMDESK_NESTED_TEST:-0} != 1 ]]; then
+    runtime="${XDG_RUNTIME_DIR:-/run/user/$UID}"
     exec timeout --kill-after=4s 55s bwrap --die-with-parent --unshare-net --dev-bind / / \
-        env STREAMDESK_NESTED_TEST=1 dbus-run-session -- "$0" "$prefix"
+        --tmpfs "$runtime" env STREAMDESK_NESTED_TEST=1 dbus-run-session -- "$0" "$prefix"
 fi
 
 scratch=$(mktemp -d)
@@ -50,9 +51,17 @@ for ((n=0; n<40; n++)); do
     if [[ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" && -S "$XDG_RUNTIME_DIR/pipewire-0" ]]; then break; fi
     sleep .2
 done
-wayland-info >"$scratch/wayland.log"
-display=$(awk '/^[[:space:]]+name: / { if ($2 ~ /^Virtual-[[:alnum:]-]+$/) {print $2; exit} }' "$scratch/wayland.log")
-[[ -n "$display" ]]
+QT_QPA_PLATFORM=wayland krfb-virtualmonitor --desktopfile org.kde.krfb.virtualmonitor \
+    --name StreamDesk --resolution 1440x1080 --scale 1 --port 45901 --password isolated-test >"$scratch/krfb.log" 2>&1 &
+pids+=("$!")
+display=Virtual-StreamDesk
+for ((n=0; n<40; n++)); do
+    wayland-info >"$scratch/wayland.log"
+    if grep -Eq "^[[:space:]]+name: $display$" "$scratch/wayland.log"; then break; fi
+    sleep .2
+done
+grep -Eq "^[[:space:]]+name: $display$" "$scratch/wayland.log"
+grep -Eq '^[[:space:]]+name: Virtual-0$' "$scratch/wayland.log"
 
 cat > "$scratch/base.conf" <<CONF
 bind_address = 127.0.0.1
@@ -60,6 +69,7 @@ upnp = disabled
 port = 48289
 sunshine_name = StreamDesk nested probe
 capture = kwin
+encoder = vaapi
 kwin_require_output = enabled
 stream_audio = disabled
 controller = disabled
@@ -80,7 +90,7 @@ for ((n=0; n<40; n++)); do
 done
 kill "$absent" 2>/dev/null || true
 wait "$absent" || true
-pids=("${pids[@]:0:2}")
+unset 'pids[-1]'
 grep -q 'Requested output is unavailable.*Expected-absent-output' "$scratch/absent.log"
 ! grep -q 'Screencasting output name' "$scratch/absent.log"
 printf 'Verified refusal to capture another screen when the configured output is missing\n'
@@ -89,8 +99,8 @@ cp "$scratch/base.conf" "$scratch/pass.conf"
 printf 'output_name = %s\n' "$display" >> "$scratch/pass.conf"
 ./bin/sunshine "$scratch/pass.conf" >"$scratch/found.log" 2>&1 &
 pids+=("$!")
-for ((n=0; n<50; n++)); do
-    if curl --noproxy '*' --max-time 1 -fsS http://127.0.0.1:48289/serverinfo >"$scratch/serverinfo.xml" 2>/dev/null; then break; fi
+for ((n=0; n<115; n++)); do
+    if grep -q "Found H.264 encoder" "$scratch/found.log" && curl --noproxy '*' --max-time 1 -fsS http://127.0.0.1:48289/serverinfo >"$scratch/serverinfo.xml" 2>/dev/null; then break; fi
     sleep .25
 done
 grep -Fq "Screencasting output name $display" "$scratch/found.log"
