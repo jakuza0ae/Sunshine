@@ -39,6 +39,8 @@ The installer compiles and stages a revision under `${XDG_DATA_HOME:-$HOME/.loca
 
 Open `https://localhost:48190` on the Linux host to initialize or administer this instance. In StreamDesk on the iPad, add the host as `LAN-IP:48189`, pair and choose **StreamDesk Display**. The built-in client profile initially requests H.264, 1280×960, 30 FPS and 6 Mb/s. The second-display settings also offer 1024×768 and 1440×1080.
 
+New installations leave audio on the computer. To use the same default with a previously installed host, set `stream_audio = disabled` in its StreamDesk Sunshine configuration. The installer preserves existing settings and paired devices.
+
 `Virtual-StreamDesk` can be positioned in KDE Display Configuration. The host service waits for it before starting capture. KWin rejects capture if the named output disappears. The KRfb VNC TCP listener is confined to a separate network namespace. KWin permissions are registered for the specific fork binary.
 
 The command below stops the StreamDesk host and releases its virtual display.

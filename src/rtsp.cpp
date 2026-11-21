@@ -1262,10 +1262,11 @@ namespace rtsp_stream {
         configuredBitrateKbps /= 100.f / (100 - config::stream.fec_percentage);
       }
 
-      // Adjust the bitrate to account for audio traffic bandwidth usage (capped at 20% reduction).
-      // The bitrate per channel is 256 Kbps for high quality mode and 96 Kbps for normal quality.
-      auto audioBitrateAdjustment = (config.audio.flags[audio::config_t::HIGH_QUALITY] ? 256 : 96) * config.audio.channels;
-      configuredBitrateKbps -= std::min((std::int64_t) audioBitrateAdjustment, configuredBitrateKbps / 5);
+      if (config::audio.stream) {
+        // Reserve bandwidth for audio packets, capped at 20% of the budget.
+        auto audioBitrateAdjustment = (config.audio.flags[audio::config_t::HIGH_QUALITY] ? 256 : 96) * config.audio.channels;
+        configuredBitrateKbps -= std::min((std::int64_t) audioBitrateAdjustment, configuredBitrateKbps / 5);
+      }
 
       // Reduce it by another 500Kbps to account for A/V packet overhead and control data
       // traffic (capped at 10% reduction).

@@ -102,6 +102,8 @@ capture = kwin
 encoder = vaapi
 kwin_require_output = enabled
 stream_audio = disabled
+fec_percentage = 20
+min_log_level = debug
 controller = disabled
 hevc_mode = 1
 av1_mode = 1
@@ -164,9 +166,9 @@ if [[ -n "$client" ]]; then
 
     for size in 1024x768 1280x960 1440x1080; do
         case "$size" in
-            1024x768) bitrate=4000 ;;
-            1280x960) bitrate=6000 ;;
-            1440x1080) bitrate=8000 ;;
+            1024x768) bitrate=4000; video_bitrate=2880 ;;
+            1280x960) bitrate=6000; video_bitrate=4320 ;;
+            1440x1080) bitrate=8000; video_bitrate=5900 ;;
         esac
         outfile="$scratch/video-$size.h264"
         status=0
@@ -176,6 +178,10 @@ if [[ -n "$client" ]]; then
             -app "StreamDesk Display" -codec h264 -platform fake -viewonly -nosops -quitappafter \
             -keydir "$keydir" -port 48289 127.0.0.1 >"$scratch/stream-$size.log" 2>&1 || status=$?
         [[ "$status" == 0 || "$status" == 124 ]]
+        if ! grep -Fq "Final adjusted video encoding bitrate is $video_bitrate Kbps" "$scratch/found.log"; then
+            printf 'Unexpected video bitrate with audio disabled for %s\n' "$size" >&2
+            exit 1
+        fi
         ffprobe -v error -count_frames -select_streams v:0 -show_entries stream=codec_name,width,height,nb_read_frames \
             -of json "$outfile" |
             jq -e --arg size "$size" '.streams[0] | select(.codec_name=="h264" and "\(.width)x\(.height)"==$size and (.nb_read_frames|tonumber)>=30)'
