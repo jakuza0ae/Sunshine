@@ -94,6 +94,7 @@ if [[ ! -x "$target/bin/sunshine" ]]; then
             -DSUNSHINE_PUBLISHER_WEBSITE=https://github.com/jakuza0ae/Sunshine/tree/linux-streamdesk
         nice -n 15 cmake --build "$build" --parallel "$jobs"
         DESTDIR="$staging" cmake --install "$build"
+        install -m755 "$files/streamdesk-usb-relay.py" "$staging/usr/bin/"
     fi
     [[ -x "$staging/usr/bin/sunshine" && -f "$staging/usr/share/streamdesk/web/index.html" ]]
     mv -T "$staging/usr" "$target"

@@ -53,6 +53,20 @@ The command below stops the StreamDesk host and releases its virtual display.
 ~/.local/bin/streamdesk-host stop
 ```
 
+## Lightning USB
+
+After pairing and opening the computer's app list, choose **Connect → USB**
+in StreamDesk (build 7 or later) and run the following command on Linux.
+
+```sh
+~/.local/bin/streamdesk-host usb
+```
+
+Choose **Open second display** when the iPad shows that USB is connected.
+Choose **Connect → Wi-Fi** to use the saved network address again. The relay
+needs Python 3.11+, libusbmuxd and a trusted USB connection. Ctrl+C stops the
+relay. See [USB.md](USB.md) for protocol details and verification.
+
 ## Diagnose
 
 `journalctl --user -u streamdesk-host.service -u streamdesk-display.service` shows capture, encoder and display setup. Check `Found H.264 encoder`, `Screencasting output name Virtual-StreamDesk` and the reported capture dimensions. GPU, display scale, Wi-Fi quality and device decoder behavior all affect the stream. Use the iPad toolbar **Stats** and the client's [measurement matrix](https://github.com/jakuza0ae/moonlight-ios/blob/ipad-streamdesk/docs/streamdesk/research.md) to assess latency and dropped frames under a repeatable workload.

@@ -17,10 +17,10 @@ if ! build_info=$(cd "$root" && XDG_CONFIG_HOME="$scratch/config" timeout 5s bin
 fi
 bundle="$scratch/StreamDesk-Host"
 install -d "$bundle/payload/bin" "$bundle/payload/share"
-install -m755 "$root/bin/sunshine" "$bundle/payload/bin/"
+install -m755 "$root/bin/sunshine" "$files/streamdesk-usb-relay.py" "$bundle/payload/bin/"
 cp -a "$root/share/streamdesk" "$bundle/payload/share/"
 install -m755 "$files/install.sh" "$files/streamdesk-host" "$bundle/"
-install -m644 "$files/"*.service "$files/sunshine.conf" "$files/apps.json" "$files/README.md" "$bundle/"
+install -m644 "$files/"*.service "$files/sunshine.conf" "$files/apps.json" "$files/README.md" "$files/USB.md" "$bundle/"
 install -m644 "$files/../../../LICENSE" "$bundle/LICENSE"
 printf '%s\n' "$revision" > "$bundle/build-revision"
 uname -m > "$bundle/build-architecture"

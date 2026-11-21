@@ -38,6 +38,17 @@ case "${1:-run}" in
     stop)
         exec systemctl --user stop streamdesk-host.service
         ;;
+    usb)
+        shift
+        target=$(readlink -f "$data/current")
+        port=$(awk -F= '/^[[:space:]]*port[[:space:]]*=/ {
+            value=$2
+            sub(/[[:space:]]*#.*/, "", value)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+            port=value
+        } END { print port == "" ? "48189" : port }' "$config/sunshine/sunshine.conf")
+        exec python3 "$target/bin/streamdesk-usb-relay.py" --port "$port" "$@"
+        ;;
     doctor)
         result=0
         for program in bwrap krfb-virtualmonitor kscreen-doctor jq curl; do
@@ -74,7 +85,7 @@ case "${1:-run}" in
         exit "$result"
         ;;
     *)
-        printf '%s\n' 'Usage: streamdesk-host {start|stop|doctor|version}' >&2
+        printf '%s\n' 'Usage: streamdesk-host {start|stop|doctor|version|usb}' >&2
         exit 2
         ;;
 esac
