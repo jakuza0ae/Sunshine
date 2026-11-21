@@ -12,6 +12,8 @@ tar -xzf StreamDesk-Host-linux-x86_64.tar.gz && bash StreamDesk-Host/install.sh
 
 The package still uses the machine's runtime libraries and KDE tools. It requires no compilation or root access. A source build is available for machines with different dependencies.
 
+`pack-prebuilt.sh` checks that Sunshine reports the same Git commit as the packaging checkout and that it was built from clean sources. Run `bash packaging/linux/streamdesk/test-prebuilt-revision.sh` to verify revision detection and rejection of mismatched binaries.
+
 ## Install from source
 
 Arch/CachyOS with a C++23 development environment, CMake, Ninja and Node/npm is the primary target. The build requires the usual Sunshine development libraries and KDE's `krfb-virtualmonitor`, `kscreen-doctor`, `bubblewrap` and `jq`. A hardware H.264 encoder and write access to `/dev/uinput` are recommended for remote mouse and keyboard.

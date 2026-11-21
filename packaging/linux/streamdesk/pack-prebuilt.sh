@@ -5,10 +5,16 @@ set -euo pipefail
 files=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$1" && pwd)
 archive=$(realpath -m "$2")
-revision=$(git -C "$files" rev-parse --short=16 HEAD)
+commit=$(git -C "$files" rev-parse HEAD)
+revision=${commit:0:16}
 [[ -x "$root/bin/sunshine" && -f "$root/share/streamdesk/web/index.html" ]]
 scratch=$(mktemp -d)
 trap 'python3 -c "import shutil,sys; shutil.rmtree(sys.argv[1])" "$scratch"' EXIT
+if ! build_info=$(XDG_CONFIG_HOME="$scratch/config" timeout 5s "$root/bin/sunshine" --version 2>&1) ||
+    [[ "$build_info"$'\n' != *" commit: $commit"$'\n'* || "$build_info" == *"-dirty commit: $commit"* ]]; then
+    printf 'Expected a clean Sunshine build from commit %s. Reconfigure and rebuild before packaging.\n' "$commit" >&2
+    exit 1
+fi
 bundle="$scratch/StreamDesk-Host"
 install -d "$bundle/payload/bin" "$bundle/payload/share"
 install -m755 "$root/bin/sunshine" "$bundle/payload/bin/"
