@@ -972,6 +972,21 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### kwin_require_output
+
+Description
+:   With `capture = kwin`, capture only the exact `output_name` configured for this host. If it is missing, Sunshine rejects capture. This also pins the output during capture reinitialization and when a client requests display switching.
+
+Default
+:   `disabled`
+
+Example
+:   @code{.unparsed}
+    capture = kwin
+    output_name = Virtual-StreamDesk
+    kwin_require_output = enabled
+    @endcode
+
 ### output_name
 
 <table>

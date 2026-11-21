@@ -1,0 +1,12 @@
+[Unit]
+Description=StreamDesk virtual KDE display
+After=plasma-kwin_wayland.service
+Requisite=plasma-kwin_wayland.service
+PartOf=graphical-session.target
+StopWhenUnneeded=yes
+
+[Service]
+Type=exec
+ExecStart=%h/.local/bin/streamdesk-host display
+ExecStartPost=%h/.local/bin/streamdesk-host wait-display
+TimeoutStartSec=16

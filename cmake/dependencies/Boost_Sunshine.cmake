@@ -3,7 +3,8 @@
 #
 include_guard(GLOBAL)
 
-set(BOOST_VERSION "1.89.0")
+set(BOOST_MINIMUM_VERSION "1.89.0")
+set(BOOST_VERSION "1.92.0")
 set(BOOST_COMPONENTS
         filesystem
         log
@@ -33,7 +34,7 @@ endif()
 if (CMAKE_VERSION VERSION_GREATER_EQUAL "3.30")
     cmake_policy(SET CMP0167 NEW)  # Get BoostConfig.cmake from upstream
 endif()
-find_package(Boost CONFIG ${BOOST_VERSION} EXACT COMPONENTS ${BOOST_COMPONENTS})
+find_package(Boost CONFIG ${BOOST_MINIMUM_VERSION} COMPONENTS ${BOOST_COMPONENTS})
 if(NOT Boost_FOUND)
     message(STATUS "Boost v${BOOST_VERSION} package not found in the system. Falling back to FetchContent.")
     include(FetchContent)
@@ -58,13 +59,14 @@ if(NOT Boost_FOUND)
     # Limit boost to the required libraries only
     set(BOOST_INCLUDE_LIBRARIES ${BOOST_COMPONENTS})
     set(BOOST_URL "https://github.com/boostorg/boost/releases/download/boost-${BOOST_VERSION}/boost-${BOOST_VERSION}-cmake.tar.xz")  # cmake-lint: disable=C0301
-    set(BOOST_HASH "SHA256=67acec02d0d118b5de9eb441f5fb707b3a1cdd884be00ca24b9a73c995511f74")
+    set(BOOST_HASH "SHA256=9bed76128d4e46755dbe818487788c6fceb6f72b378f4daa49b7e1e600d9088d")
 
     if(CMAKE_VERSION VERSION_LESS "3.24.0")
         FetchContent_Declare(
                 Boost
                 URL ${BOOST_URL}
                 URL_HASH ${BOOST_HASH}
+                PATCH_COMMAND ${BOOST_PATCH_COMMAND}
         )
     elseif(APPLE AND CMAKE_VERSION VERSION_GREATER_EQUAL "3.25.0")
         # add SYSTEM to FetchContent_Declare, this fails on debian bookworm
@@ -72,6 +74,7 @@ if(NOT Boost_FOUND)
                 Boost
                 URL ${BOOST_URL}
                 URL_HASH ${BOOST_HASH}
+                PATCH_COMMAND ${BOOST_PATCH_COMMAND}
                 SYSTEM  # requires CMake 3.25+
                 OVERRIDE_FIND_PACKAGE  # requires CMake 3.24+, but we have a macro to handle it for other versions
         )
@@ -80,6 +83,7 @@ if(NOT Boost_FOUND)
                 Boost
                 URL ${BOOST_URL}
                 URL_HASH ${BOOST_HASH}
+                PATCH_COMMAND ${BOOST_PATCH_COMMAND}
                 OVERRIDE_FIND_PACKAGE  # requires CMake 3.24+, but we have a macro to handle it for other versions
         )
     endif()

@@ -1,0 +1,9 @@
+[Unit]
+Description=StreamDesk Sunshine host
+BindsTo=streamdesk-display.service
+After=streamdesk-display.service
+PartOf=graphical-session.target
+
+[Service]
+Type=exec
+ExecStart=%h/.local/bin/streamdesk-host run

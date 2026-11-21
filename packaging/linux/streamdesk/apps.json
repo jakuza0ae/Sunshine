@@ -1,0 +1,9 @@
+{
+  "env": {},
+  "apps": [
+    {
+      "name": "StreamDesk Display",
+      "image-path": "desktop.png"
+    }
+  ]
+}

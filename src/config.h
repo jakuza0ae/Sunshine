@@ -127,6 +127,7 @@ namespace config {
     std::string encoder;  ///< Encoder backend name selected by configuration.
     std::string adapter_name;  ///< Display adapter name selected in configuration.
     std::string output_name;  ///< Display output name selected in configuration.
+    bool kwin_require_output;  ///< Capture only the configured output under KWin.
 
     /**
      * @brief Display-device integration settings.

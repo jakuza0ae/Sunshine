@@ -19,6 +19,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <tuple>
 
 // lib includes
 #include <lizardbyte/common/env.h>
@@ -34,6 +35,8 @@
 // local includes
 #include "cuda.h"
 #include "graphics.h"
+#include "kwin_output_policy.h"
+#include "src/config.h"
 #include "pipewire.cpp"
 #include "src/platform/common.h"
 #include "src/video.h"
@@ -364,7 +367,7 @@ namespace kwin {
         sorted_outputs.emplace_back(output_parameter);
       }
       std::ranges::sort(sorted_outputs, [](const auto &a, const auto &b) {
-        return a->order < b->order || a->pos_x < b->pos_x || a->pos_y < b->pos_y;
+        return std::tie(a->order, a->pos_x, a->pos_y, a->name) < std::tie(b->order, b->pos_x, b->pos_y, b->name);
       });
       std::vector<std::string> output_names;
       for (const auto &output_parameter : sorted_outputs) {
@@ -389,30 +392,20 @@ namespace kwin {
     /**
      * @brief Request a screencast stream.
      * @param output_name Which wl_output to capture.
+     * @param require_output Fail when the requested output does not exist.
      * @return 0 on success, -1 on failure. On success, node_id and
      *         output width/height/x/y are populated.
      */
-    int start(const std::string_view &output_name) {
-      // Try find correct output by name
-      if (outputs.empty()) {
-        BOOST_LOG(error) << "[kwingrab] no wl_output found"sv;
+    int start(std::string_view output_name, bool require_output) {
+      const auto selected = select_output(outputs, output_name, require_output, [](const auto &entry) -> const auto & {
+        return entry.second->name;
+      });
+      if (selected == outputs.end()) {
+        BOOST_LOG(error) << "[kwingrab] Requested output is unavailable: '"sv << output_name << "'."sv;
         return -1;
       }
-      struct wl_output *output = nullptr;
-      if (!output_name.empty()) {
-        for (auto const &[output_, params_] : outputs) {
-          if (params_->name == output_name) {
-            output = output_;
-            out_params = params_;
-          }
-        }
-      }
-      // Fall back to first element from the map in case of error
-      if (!output || !out_params) {
-        const auto output_ = outputs.begin();
-        output = output_->first;
-        out_params = output_->second;
-      }
+      auto *output = selected->first;
+      out_params = selected->second;
 
       // Request a stream for the chosen output with embedded cursor
       if (kde_screencast_v1_) {
@@ -688,7 +681,9 @@ namespace kwin {
         }
       }
 #endif
-      if (screencast->start(display_name) < 0) {
+      const auto &video_settings = ::config::video;
+      const auto &target = video_settings.kwin_require_output ? video_settings.output_name : display_name;
+      if (screencast->start(target, video_settings.kwin_require_output) < 0) {
         return -1;
       }
       if (screencast->out_params) {

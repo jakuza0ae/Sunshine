@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+data="${XDG_DATA_HOME:-$HOME/.local/share}/streamdesk-host"
+config="${XDG_CONFIG_HOME:-$HOME/.config}/streamdesk-host"
+case "${1:-run}" in
+    run)
+        cd "$(readlink -f "$data/current")"
+        export XDG_CONFIG_HOME="$config"
+        exec "$PWD/bin/sunshine" "$config/sunshine/sunshine.conf"
+        ;;
+    version)
+        cd "$(readlink -f "$data/current")"
+        XDG_CONFIG_HOME="$config" exec "$PWD/bin/sunshine" "$config/sunshine/sunshine.conf" --version
+        ;;
+    display)
+        export QT_QPA_PLATFORM=wayland
+        exec bwrap --die-with-parent --unshare-net --dev-bind / / \
+            krfb-virtualmonitor --desktopfile org.kde.krfb.virtualmonitor \
+            --name StreamDesk --resolution 1440x1080 --scale 1 --port 45901 --password isolated-local
+        ;;
+    wait-display)
+        for ((attempt=0; attempt<60; attempt++)); do
+            if kscreen-doctor -j 2>/dev/null |
+                jq -e 'any(.outputs[]; .name == "Virtual-StreamDesk")' >/dev/null; then
+                kscreen-doctor output.Virtual-StreamDesk.scale.1.25
+                exit
+            fi
+            sleep 0.2
+        done
+        printf '%s\n' 'KDE did not create Virtual-StreamDesk' >&2
+        exit 1
+        ;;
+    start)
+        exec systemctl --user start streamdesk-host.service
+        ;;
+    stop)
+        exec systemctl --user stop streamdesk-host.service
+        ;;
+    doctor)
+        result=0
+        for program in bwrap krfb-virtualmonitor kscreen-doctor jq curl; do
+            if ! command -v "$program" >/dev/null; then
+                printf 'Missing %s\n' "$program"
+                result=1
+            fi
+        done
+        printf 'KDE Wayland: '
+        systemctl --user is-active plasma-kwin_wayland.service || result=1
+        printf 'Remote input: '
+        if [[ -w /dev/uinput ]]; then printf '%s\n' 'available'; else printf '%s\n' '/dev/uinput is not writable'; fi
+        if command -v vainfo >/dev/null && [[ -r /dev/dri/renderD128 ]]; then
+            printf 'VA-API H.264: '
+            if vainfo --display drm --device /dev/dri/renderD128 2>/dev/null |
+                awk '/VAProfileH264/ && /VAEntrypointEncSlice/ { found=1 } END {exit !found}'; then
+                printf '%s\n' 'hardware encoding available'
+            else
+                printf '%s\n' 'encoder not reported'
+            fi
+        fi
+        printf 'StreamDesk service: '
+        if systemctl --user is-active streamdesk-host.service; then
+            printf 'GameStream endpoint: '
+            if curl --noproxy '*' -fsS --max-time 2 http://127.0.0.1:48189/serverinfo >/dev/null; then
+                printf '%s\n' 'responding'
+            else
+                printf '%s\n' 'unreachable'
+                result=1
+            fi
+        fi
+        printf 'StreamDesk display: '
+        kscreen-doctor -j | jq -r '[.outputs[] | select(.name == "Virtual-StreamDesk") | "present (scale \(.scale))"] | first // "inactive"'
+        exit "$result"
+        ;;
+    *)
+        printf '%s\n' 'Usage: streamdesk-host {start|stop|doctor|version}' >&2
+        exit 2
+        ;;
+esac
