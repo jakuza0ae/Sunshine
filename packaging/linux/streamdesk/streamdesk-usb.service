@@ -1,0 +1,14 @@
+[Unit]
+Description=StreamDesk Lightning USB relay
+Requisite=streamdesk-host.service
+After=streamdesk-host.service
+PartOf=streamdesk-host.service
+
+[Service]
+Type=exec
+ExecStart=%h/.local/bin/streamdesk-host usb --wait
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=streamdesk-host.service

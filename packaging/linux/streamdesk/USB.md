@@ -7,12 +7,16 @@ The host explicitly selects a physical USB device. The ordinary LAN service
 continues to serve existing Wi-Fi clients.
 
 The relay needs Python 3.11+, libusbmuxd and usbmuxd running on the Linux host.
-An already paired iPad is required. Device selection uses `idevice_id` when no
-`--udid` is supplied. Run the relay in the foreground with
+An already paired iPad is required. The relay selects the sole physically
+attached device unless you supply `--udid`. Run the relay in the foreground with
 `~/.local/bin/streamdesk-host usb` once StreamDesk build 7 or later is waiting
 in **Connect → USB**. The launcher uses the configured GameStream port.
 In a source checkout, you can also run
 `python3 packaging/linux/streamdesk/streamdesk-usb-relay.py --port 48189`.
+Add `--wait` to wait for the device and retry after disconnect. The optional
+systemd user service provides the same behavior while StreamDesk Host is
+running. Use `streamdesk-host usb-auto` and `streamdesk-host usb-auto-off`
+to enable and disable the service. It is disabled on a fresh install.
 
 ## Wire protocol
 

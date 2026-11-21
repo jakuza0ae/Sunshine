@@ -49,6 +49,16 @@ case "${1:-run}" in
         } END { print port == "" ? "48189" : port }' "$config/sunshine/sunshine.conf")
         exec python3 "$target/bin/streamdesk-usb-relay.py" --port "$port" "$@"
         ;;
+    usb-auto)
+        systemctl --user is-active --quiet streamdesk-host.service || {
+            printf '%s\n' 'Start StreamDesk Host before enabling USB auto-connect.' >&2
+            exit 1
+        }
+        exec systemctl --user enable --now streamdesk-usb.service
+        ;;
+    usb-auto-off)
+        exec systemctl --user disable --now streamdesk-usb.service
+        ;;
     doctor)
         result=0
         for program in bwrap krfb-virtualmonitor kscreen-doctor jq curl; do
@@ -85,7 +95,7 @@ case "${1:-run}" in
         exit "$result"
         ;;
     *)
-        printf '%s\n' 'Usage: streamdesk-host {start|stop|doctor|version|usb}' >&2
+        printf '%s\n' 'Usage: streamdesk-host {start|stop|doctor|version|usb|usb-auto|usb-auto-off}' >&2
         exit 2
         ;;
 esac

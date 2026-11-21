@@ -6,6 +6,7 @@ from pathlib import Path
 import runpy
 import socket
 import unittest
+from unittest.mock import patch
 
 
 relay = runpy.run_path(str(Path(__file__).with_name("streamdesk-usb-relay.py")))
@@ -118,6 +119,49 @@ class UsbRelayTests(unittest.IsolatedAsyncioTestCase):
         await self.wait(job)
         self.assertEqual(await self.wait(video_reader.read()), b"")
         self.assertEqual(await self.wait(control_reader.read()), b"")
+
+    async def test_wait_retries_after_unplug_with_fresh_device_handle(self):
+        events = []
+        handles = iter((None, 7, 42))
+        address = self.cable_address
+
+        class FakeUsb:
+            def select(self, udid):
+                self.udid = udid
+                handle = next(handles)
+                if handle is None:
+                    raise relay["UsbUnavailable"]("No physical USB device.")
+                return handle
+
+            async def open(self, handle):
+                events.append(handle)
+                return await asyncio.open_connection(*address)
+
+        connect_loop = relay["connect_loop"]
+        usb = FakeUsb()
+        with patch.dict(connect_loop.__globals__, RETRY_DELAY=0.01):
+            job = asyncio.create_task(connect_loop(usb, "test-device", 48189, True, events.append))
+            self.addAsyncCleanup(self.cleanup_job, job)
+            for index, handle in enumerate((7, 42), 1):
+                reader, writer = await self.lane(CONTROL, 0)
+                self.assertEqual(await self.wait(reader.readexactly(2)), relay["BASE_PORT"].pack(48189))
+                writer.write(MAGIC)
+                await writer.drain()
+                self.assertIn(handle, events)
+                self.assertEqual(usb.udid, "test-device")
+
+                async def wait_online():
+                    while events.count("StreamDesk USB connected.") < index:
+                        await asyncio.sleep(.001)
+
+                await self.wait(wait_online())
+                if index == 1:
+                    writer.close()
+                    await writer.wait_closed()
+
+            self.assertIn("No physical USB device.", events)
+            self.assertIn("StreamDesk USB disconnected. Waiting for the next session.", events)
+            await self.cleanup_job(job)
 
     async def test_rejects_request_outside_sunshine_endpoints(self):
         job, reader, writer = await self.start_relay(48189)

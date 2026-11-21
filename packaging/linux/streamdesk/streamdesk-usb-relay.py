@@ -3,12 +3,14 @@
 
 import argparse
 import asyncio
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager, contextmanager, suppress
 import ctypes
 from ctypes.util import find_library
+import fcntl
+import os
+from pathlib import Path
 import socket
 import struct
-import subprocess
 import sys
 
 
@@ -24,6 +26,9 @@ UDP_OFFSETS = frozenset((9, 10, 11))
 MAX_LANES = 24
 MAX_DATAGRAM = 16384
 SETUP_TIMEOUT = 5
+RETRY_DELAY = 2
+USBMUX_LOOKUP_USB = 1 << 1
+USB_CONNECTION = 1
 
 
 class UsbDeviceInfo(ctypes.Structure):
@@ -38,52 +43,69 @@ class UsbDeviceInfo(ctypes.Structure):
     ]
 
 
+class UsbUnavailable(OSError):
+    """No unique physical USB receiver is currently available."""
+
+
 class UsbDevice:
     """Open TCP channels through a physical USB connection only."""
 
-    def __init__(self, udid):
-        if udid is None:
-            result = subprocess.run(
-                ["idevice_id", "-l"], capture_output=True, text=True, check=True, timeout=SETUP_TIMEOUT
-            )
-            devices = result.stdout.splitlines()
-            if len(devices) != 1:
-                raise RuntimeError("Connect one iPad over USB, or pass --udid.")
-            udid = devices[0]
-
+    def __init__(self):
         library = find_library("usbmuxd-2.0")
         if not library:
             raise RuntimeError("libusbmuxd is required.")
         self.mux = ctypes.CDLL(library)
-        self.mux.usbmuxd_get_device.argtypes = [
-            ctypes.c_char_p, ctypes.POINTER(UsbDeviceInfo), ctypes.c_int
-        ]
+        device_list = ctypes.POINTER(UsbDeviceInfo)
+        self.mux.usbmuxd_get_device_list.argtypes = [ctypes.POINTER(device_list)]
+        self.mux.usbmuxd_get_device_list.restype = ctypes.c_int
+        self.mux.usbmuxd_device_list_free.argtypes = [ctypes.POINTER(device_list)]
+        self.mux.usbmuxd_device_list_free.restype = ctypes.c_int
+        self.mux.usbmuxd_get_device.argtypes = [ctypes.c_char_p, device_list, ctypes.c_int]
         self.mux.usbmuxd_get_device.restype = ctypes.c_int
         self.mux.usbmuxd_connect.argtypes = [ctypes.c_uint32, ctypes.c_ushort]
         self.mux.usbmuxd_connect.restype = ctypes.c_int
-        device = UsbDeviceInfo()
-        lookup_usb = 1 << 1
-        result = self.mux.usbmuxd_get_device(udid.encode(), ctypes.byref(device), lookup_usb)
-        if result != 1 or device.connection_type != 1:
-            raise RuntimeError("The selected device is unavailable over USB.")
-        self.handle = device.handle
 
-    async def open(self):
+    def select(self, udid):
+        """Resolve a fresh handle after disconnect or device replacement."""
+        if udid is not None:
+            device = UsbDeviceInfo()
+            result = self.mux.usbmuxd_get_device(
+                udid.encode("ascii"), ctypes.byref(device), USBMUX_LOOKUP_USB
+            )
+            if result == 1 and device.connection_type == USB_CONNECTION:
+                return device.handle
+            raise UsbUnavailable("The selected device is unavailable over USB.")
+
+        devices = ctypes.POINTER(UsbDeviceInfo)()
+        count = self.mux.usbmuxd_get_device_list(ctypes.byref(devices))
+        try:
+            if count < 0:
+                raise UsbUnavailable("usbmuxd is not available.")
+            handles = {devices[index].handle for index in range(count)
+                       if devices[index].connection_type == USB_CONNECTION}
+        finally:
+            if devices:
+                self.mux.usbmuxd_device_list_free(ctypes.byref(devices))
+        if len(handles) != 1:
+            raise UsbUnavailable("Connect one iPad over USB, or pass --udid.")
+        return handles.pop()
+
+    async def open(self, handle):
         """Return streams for a fresh USB lane."""
         # Keep a reference to the socket in the worker result so cancellation
         # before the result is consumed also releases its file descriptor.
-        sock = await asyncio.to_thread(self.connect)
+        sock = await asyncio.to_thread(self.connect, handle)
         try:
             return await asyncio.open_connection(sock=sock)
         except BaseException:
             sock.close()
             raise
 
-    def connect(self):
+    def connect(self, handle):
         """Connect through usbmuxd to the client listener."""
-        fd = self.mux.usbmuxd_connect(self.handle, USB_PORT)
+        fd = self.mux.usbmuxd_connect(handle, USB_PORT)
         if fd < 0:
-            raise OSError("Cannot open the USB lane. Open StreamDesk's USB listener on the iPad.")
+            raise UsbUnavailable("Open Connect → USB in StreamDesk on the iPad.")
         return socket.socket(fileno=fd)
 
 
@@ -200,20 +222,64 @@ async def serve_relay(open_usb, base, online=lambda: None):
             await asyncio.gather(*remaining, return_exceptions=True)
 
 
+@contextmanager
+def relay_lock(port):
+    """Allow one managed relay per Sunshine base port."""
+    runtime = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}")
+    with (runtime / f"streamdesk-usb-{port}.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError("A StreamDesk USB relay is already running for this port.") from None
+        yield
+
+
+async def connect_loop(device, udid, port, wait, status=print):
+    """Serve one session, or wait for a new cable session after disconnect."""
+    waiting_message = None
+
+    def online():
+        nonlocal waiting_message
+        waiting_message = None
+        status("StreamDesk USB connected.")
+
+    while True:
+        try:
+            handle = await asyncio.to_thread(device.select, udid)
+
+            async def open_usb():
+                return await device.open(handle)
+
+            await serve_relay(open_usb, port, online)
+            if not wait:
+                return
+            message = "StreamDesk USB disconnected. Waiting for the next session."
+        except (OSError, ValueError, asyncio.IncompleteReadError) as error:
+            if not wait:
+                raise
+            message = str(error) or "Waiting for StreamDesk USB."
+        if message != waiting_message:
+            status(message)
+            waiting_message = message
+        await asyncio.sleep(RETRY_DELAY)
+
+
 def main():
     """Run a foreground Lightning relay for the local StreamDesk Host."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--udid", help="select a physical iPad when several devices are attached")
     parser.add_argument("--port", type=int, default=48189, help="Sunshine GameStream base port")
+    parser.add_argument("--wait", action="store_true", help="wait for the iPad and reconnect after unplug")
     args = parser.parse_args()
     if not 6 <= args.port <= 65535 - max(TCP_OFFSETS):
         parser.error("--port leaves a GameStream endpoint outside the valid port range")
     try:
-        device = UsbDevice(args.udid)
-        asyncio.run(serve_relay(device.open, args.port, lambda: print("StreamDesk USB connected.", flush=True)))
+        with relay_lock(args.port):
+            asyncio.run(connect_loop(UsbDevice(), args.udid, args.port, args.wait,
+                                     lambda message: print(message, flush=True)))
     except KeyboardInterrupt:
         return
-    except (OSError, RuntimeError, ValueError, asyncio.IncompleteReadError, subprocess.SubprocessError) as error:
+    except (OSError, RuntimeError, ValueError, asyncio.IncompleteReadError) as error:
         parser.exit(1, f"streamdesk-usb-relay: {error}\n")
 
 

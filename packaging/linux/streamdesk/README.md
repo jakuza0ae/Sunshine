@@ -65,7 +65,12 @@ in StreamDesk (build 7 or later) and run the following command on Linux.
 Choose **Open second display** when the iPad shows that USB is connected.
 Choose **Connect → Wi-Fi** to use the saved network address again. The relay
 needs Python 3.11+, libusbmuxd and a trusted USB connection. Ctrl+C stops the
-relay. See [USB.md](USB.md) for protocol details and verification.
+relay. To make future connections work without a terminal, enable
+`~/.local/bin/streamdesk-host usb-auto` once while the host is running.
+After that, choose **Connect → USB** on the iPad. Use
+`~/.local/bin/streamdesk-host usb-auto-off` to disable it. If you have a
+foreground relay running, switch after that session ends. See [USB.md](USB.md)
+for protocol details and verification.
 
 ## Diagnose
 
