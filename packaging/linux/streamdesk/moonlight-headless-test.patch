@@ -6,10 +6,10 @@ index cfa1498..bcf95a4 100644
 -  message(FATAL_ERROR "No video output available")
 +  message(STATUS "Building the headless H.264 probe")
 diff --git a/src/platform.c b/src/platform.c
-index fab3057..6650623 100644
+index fab3057..e83efd5 100644
 --- a/src/platform.c
 +++ b/src/platform.c
-@@ -140,0 +141,19 @@ void platform_stop(enum platform system) {
+@@ -140,0 +141,22 @@ void platform_stop(enum platform system) {
 +static FILE* probe_stream;
 +static int probe_setup(int format, int width, int height, int fps, void* context, int flags) {
 +  const char* path = getenv("STREAMDESK_VIDEO_PROBE");
@@ -18,6 +18,9 @@ index fab3057..6650623 100644
 +  return probe_stream ? 0 : -1;
 +}
 +static int probe_submit(PDECODE_UNIT frame) {
++  if (getenv("STREAMDESK_BENCHMARK"))
++    fprintf(stderr, "PROFILE_SAMPLE %d %u %llu\n", frame->frameNumber, frame->frameHostProcessingLatency,
++            (unsigned long long)(frame->enqueueTimeUs - frame->receiveTimeUs));
 +  for (PLENTRY nal = frame->bufferList; nal; nal = nal->next) {
 +    if (fwrite(nal->data, 1, nal->length, probe_stream) != (size_t)nal->length) return DR_NEED_IDR;
 +  }
@@ -29,5 +32,5 @@ index fab3057..6650623 100644
 +  probe_stream = NULL;
 +}
 +static DECODER_RENDERER_CALLBACKS probe_decoder = { .setup=probe_setup, .submitDecodeUnit=probe_submit, .cleanup=probe_cleanup, .capabilities=CAPABILITY_DIRECT_SUBMIT };
-@@ -142,0 +162 @@ DECODER_RENDERER_CALLBACKS* platform_get_video(enum platform system) {
+@@ -142,0 +165 @@ DECODER_RENDERER_CALLBACKS* platform_get_video(enum platform system) {
 +  case FAKE: return &probe_decoder;

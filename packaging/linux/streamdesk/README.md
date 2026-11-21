@@ -53,7 +53,7 @@ The command below stops the StreamDesk host and releases its virtual display.
 
 ## Isolated streaming regression
 
-The capture smoke test runs on loopback in its own network, D-Bus and KDE session.
+The capture smoke test runs on loopback in its own network, D-Bus and KDE session. It uses a private WirePlumber 0.5 policy session to link the capture node, with no device monitors.
 
 ```sh
 packaging/linux/streamdesk/test-nested-kwin.sh "$HOME/.local/share/streamdesk-host/current"
@@ -70,4 +70,6 @@ STREAMDESK_PROBE_CLIENT=/path/to/moonlight-embedded/build/moonlight \
   packaging/linux/streamdesk/test-nested-kwin.sh "$HOME/.local/share/streamdesk-host/current"
 ```
 
-The test performs pairing, launches **StreamDesk Display** and reads at least 30 decodable H.264 frames at the expected dimensions for each 4:3 profile. It uses `ffprobe` for validation. Input is disabled for the test client. Results cover host capture, encoding and transport over loopback. The iPad decoder and the Wi-Fi link need separate validation.
+The test performs pairing, launches **StreamDesk Display** and reads at least 30 decodable H.264 frames at the expected dimensions for each 4:3 profile. It uses `ffprobe` for validation. Input is disabled for the test client. For a content check, also set `STREAMDESK_TEST_ANIMATED=1`. This mode requires GTK 4, GTK4 Layer Shell with its Python bindings, and FFmpeg. A moving test pattern runs on the nested virtual display. The regression requires distinct decoded frames and nonzero host processing samples for every requested mode.
+
+Results cover host capture, encoding and transport over loopback. The iPad decoder and the Wi-Fi link need separate validation.

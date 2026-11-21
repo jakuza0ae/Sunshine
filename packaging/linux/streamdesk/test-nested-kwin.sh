@@ -6,6 +6,12 @@ usage='Usage: test-nested-kwin.sh /absolute/path/to/install-root'
 prefix=$(cd "$1" && pwd)
 script_dir=$(cd "$(dirname "$0")" && pwd)
 client=${STREAMDESK_PROBE_CLIENT:-}
+animated=${STREAMDESK_TEST_ANIMATED:-0}
+command -v wireplumber >/dev/null || { echo "The isolated test requires WirePlumber 0.5 or newer" >&2; exit 2; }
+if [[ "$animated" == 1 ]]; then
+    [[ -n "$client" ]] || { echo "The animated test requires STREAMDESK_PROBE_CLIENT" >&2; exit 2; }
+    command -v ffmpeg >/dev/null
+fi
 test_timeout=55
 if [[ -n "$client" ]]; then
     test_timeout=170
@@ -39,6 +45,7 @@ export NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost
 export XDG_RUNTIME_DIR="$scratch/run" XDG_CONFIG_HOME="$scratch/config"
 export XDG_CACHE_HOME="$scratch/cache" XDG_DATA_HOME="$scratch/data"
 export PIPEWIRE_RUNTIME_DIR="$XDG_RUNTIME_DIR"
+export XDG_STATE_HOME="$scratch/state"
 export DBUS_SYSTEM_BUS_ADDRESS="unix:path=$scratch/no-system-bus"
 unset DISPLAY WAYLAND_DISPLAY PIPEWIRE_REMOTE
 install -d -m700 "$XDG_RUNTIME_DIR" "$XDG_CONFIG_HOME/sunshine" "$XDG_DATA_HOME/applications"
@@ -52,6 +59,8 @@ NoDisplay=true
 DESKTOP
 
 pipewire >"$scratch/pipewire.log" 2>&1 &
+pids+=("$!")
+wireplumber --profile=policy >"$scratch/wireplumber.log" 2>&1 &
 pids+=("$!")
 QT_QPA_PLATFORM=offscreen kwin_wayland --virtual --socket wayland-streamdesk-test \
     --width 1280 --height 960 --no-lockscreen --no-global-shortcuts >"$scratch/kwin.log" 2>&1 &
@@ -73,6 +82,16 @@ for ((n=0; n<40; n++)); do
 done
 grep -Eq "^[[:space:]]+name: $display$" "$scratch/wayland.log"
 grep -Eq '^[[:space:]]+name: Virtual-0$' "$scratch/wayland.log"
+if [[ "$animated" == 1 ]]; then
+    GDK_BACKEND=wayland GTK_A11Y=none LD_PRELOAD=libgtk4-layer-shell.so.0 nice -n 12 \
+        python3 "$script_dir/test-motion-pattern.py" >"$scratch/pattern.log" 2>&1 &
+    pids+=("$!")
+    for ((n=0; n<35; n++)); do
+        if grep -q 'Pattern ready Virtual-StreamDesk' "$scratch/pattern.log"; then break; fi
+        sleep .2
+    done
+    grep -q 'Pattern ready Virtual-StreamDesk' "$scratch/pattern.log"
+fi
 
 cat > "$scratch/base.conf" <<CONF
 bind_address = 127.0.0.1
@@ -121,6 +140,7 @@ for ((n=0; n<115; n++)); do
 done
 grep -Fq "Screencasting output name $display" "$scratch/found.log"
 grep -Fq 'Found H.264 encoder' "$scratch/found.log"
+grep -Fq 'PipeWire stream state: paused -> streaming' "$scratch/found.log"
 grep -q 'status_code="200"' "$scratch/serverinfo.xml"
 printf 'Verified named KWin capture, H.264 and an isolated GameStream endpoint\n'
 if [[ -n "$client" ]]; then
@@ -150,7 +170,8 @@ if [[ -n "$client" ]]; then
         esac
         outfile="$scratch/video-$size.h264"
         status=0
-        HOME="$scratch/client-home" STREAMDESK_VIDEO_PROBE="$outfile" timeout --signal=INT --kill-after=3s 30s \
+        HOME="$scratch/client-home" STREAMDESK_BENCHMARK=1 STREAMDESK_VIDEO_PROBE="$outfile" \
+            timeout --signal=INT --kill-after=3s 12s \
             stdbuf -oL -eL "$client" stream -verbose -width "${size%x*}" -height "${size#*x}" -fps 30 -bitrate "$bitrate" \
             -app "StreamDesk Display" -codec h264 -platform fake -viewonly -nosops -quitappafter \
             -keydir "$keydir" -port 48289 127.0.0.1 >"$scratch/stream-$size.log" 2>&1 || status=$?
@@ -158,6 +179,13 @@ if [[ -n "$client" ]]; then
         ffprobe -v error -count_frames -select_streams v:0 -show_entries stream=codec_name,width,height,nb_read_frames \
             -of json "$outfile" |
             jq -e --arg size "$size" '.streams[0] | select(.codec_name=="h264" and "\(.width)x\(.height)"==$size and (.nb_read_frames|tonumber)>=30)'
+        if [[ "$animated" == 1 ]]; then
+            ffmpeg -v error -threads 1 -i "$outfile" -threads 1 -f framemd5 - |
+                awk -F, '!/^#/ && NF >= 6 {hashes[$NF]=1}
+                    END {print "Distinct decoded frame hashes:", length(hashes); exit !(length(hashes)>30)}'
+            awk '/^PROFILE_SAMPLE / && $3>0 {count++}
+                END {print "Frames with host processing time:", count+0; exit !(count>=30)}' "$scratch/stream-$size.log"
+        fi
     done
 fi
 touch "$scratch/success"
